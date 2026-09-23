@@ -88,6 +88,8 @@ O salvamento depende da conexão com o Supabase. A interface responde imediatame
 
 `database/schema.sql` documenta a instalação em um banco novo. **Não execute novamente no projeto já configurado**: os objetos já existem. `database/hardening-existing-trigger.sql` registra a restrição aplicada à função preexistente de RLS automático.
 
+`database/multi-item-batch.sql` habilita compras e vendas com vários produtos na mesma remessa. **Execute uma vez** no SQL Editor do projeto já configurado: é aditivo e substitui apenas `itape_private.apply_command`, sem tocar em tabelas, políticas ou dados. Enquanto não for aplicado, operações de item único seguem funcionando normalmente e apenas as de dois ou mais produtos são recusadas com "Operação desconhecida.".
+
 ```sh
 npm test
 npm run check

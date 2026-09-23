@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, type FormEvent } from "react";
-import { Info, ArrowRight } from "lucide-react";
+import { Info, ArrowRight, Plus, Trash2 } from "lucide-react";
 import { type Command, type Product, money, today } from "@/lib/domain";
 import { Modal } from "./primitives";
 export type FormMode = "product" | "sale" | "purchase" | "expense" | "archive";
@@ -11,6 +11,9 @@ const titles: Record<FormMode, string> = {
   expense: "Registrar despesa",
   archive: "Arquivar produto",
 };
+// Uma linha da remessa. O valor unitário fica em reais enquanto está no campo;
+// só vira centavos no envio.
+type Line = { key: string; productId: string; quantity: number; price: number };
 export default function OperationForm({
   mode,
   product,
@@ -26,16 +29,62 @@ export default function OperationForm({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState(
-    product?.id ?? products[0]?.id ?? "",
-  );
-  const p = products.find((p) => p.id === selected);
-  const [qty, setQty] = useState(1);
-  const [price, setPrice] = useState(
-    (mode === "purchase" ? (p?.cost ?? 0) : (p?.price ?? 0)) / 100,
-  );
+  const unitFor = (p?: Product) =>
+    (mode === "purchase" ? (p?.cost ?? 0) : (p?.price ?? 0)) / 100;
+  const makeLine = (p?: Product): Line => ({
+    key: crypto.randomUUID(),
+    productId: p?.id ?? "",
+    quantity: 1,
+    price: unitFor(p),
+  });
+  const [lines, setLines] = useState<Line[]>(() => [
+    makeLine(product ?? products[0]),
+  ]);
   const retry = useRef<{ payload: string; id: string } | null>(null);
   const lock = useRef(false);
+
+  const patch = (key: string, next: Partial<Line>) =>
+    setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...next } : l)));
+  const pickProduct = (key: string, productId: string) =>
+    patch(key, {
+      productId,
+      price: unitFor(products.find((p) => p.id === productId)),
+    });
+  // O produto sugerido é escolhido dentro do atualizador: dois cliques
+  // seguidos enxergam as linhas já adicionadas, em vez de repetir o mesmo item.
+  const addLine = () =>
+    setLines((ls) => {
+      if (ls.length >= 20) return ls;
+      const used = new Set(ls.map((l) => l.productId));
+      const next = products.find((p) => !used.has(p.id)) ?? products[0];
+      return next ? [...ls, makeLine(next)] : ls;
+    });
+  const dropLine = (key: string) =>
+    setLines((ls) => (ls.length > 1 ? ls.filter((l) => l.key !== key) : ls));
+
+  const total = lines.reduce(
+    (a, l) => a + Math.round(l.price * 100) * l.quantity,
+    0,
+  );
+  // O mesmo produto pode repetir em duas linhas, então o estoque é conferido
+  // pelo total pedido, não linha a linha.
+  const requested = new Map<string, number>();
+  for (const l of lines)
+    requested.set(l.productId, (requested.get(l.productId) ?? 0) + l.quantity);
+  const short =
+    mode === "sale"
+      ? [...requested.entries()]
+          .map(([id, q]) => ({ p: products.find((x) => x.id === id), q }))
+          .find(({ p, q }) => p && q > p.stock)
+      : undefined;
+  const estimatedTax = lines.reduce((a, l) => {
+    const p = products.find((x) => x.id === l.productId);
+    return (
+      a + Math.round((Math.round(l.price * 100) * l.quantity * (p?.tax ?? 0)) / 100)
+    );
+  }, 0);
+  const incomplete = lines.some((l) => !l.productId);
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (lock.current) return;
@@ -69,15 +118,30 @@ export default function OperationForm({
       };
     else if (mode === "archive")
       cmd = { kind: "archive", productId: product!.id };
-    else
-      cmd = {
-        kind: mode,
-        productId: selected,
-        quantity: qty,
-        unitPrice: Math.round(price * 100),
-        date: str("date"),
-        party: str("party"),
-      };
+    else {
+      const items = lines.map((l) => ({
+        productId: l.productId,
+        quantity: l.quantity,
+        unitPrice: Math.round(l.price * 100),
+      }));
+      // Item único continua usando o comando simples, que já existe no banco.
+      // O lote só entra quando há mais de um produto na mesma remessa.
+      cmd =
+        items.length === 1
+          ? {
+              kind: mode,
+              ...items[0],
+              date: str("date"),
+              party: str("party"),
+            }
+          : {
+              kind: "batch",
+              operation: mode,
+              items,
+              date: str("date"),
+              party: str("party"),
+            };
+    }
     const payload = JSON.stringify(cmd);
     if (retry.current?.payload !== payload)
       retry.current = { payload, id: crypto.randomUUID() };
@@ -95,18 +159,20 @@ export default function OperationForm({
       setBusy(false);
     }
   }
+  const operation = mode === "sale" || mode === "purchase";
   return (
     <Modal
       title={product && mode === "product" ? "Editar produto" : titles[mode]}
       subtitle={
         mode === "sale"
-          ? "A venda e a baixa de estoque são registradas juntas."
+          ? "Adicione quantos produtos quiser: a venda e a baixa de estoque são registradas juntas."
           : mode === "purchase"
-            ? "Registre o custo de compra para atualizar o estoque."
+            ? "Adicione quantos produtos vieram na mesma remessa. Data e fornecedor valem para todos."
             : undefined
       }
       close={close}
       busy={busy}
+      wide={operation}
     >
       <form onSubmit={submit}>
         <fieldset disabled={busy}>
@@ -267,59 +333,101 @@ export default function OperationForm({
             </>
           ) : (
             <>
-              <label>
-                Produto
-                <select
-                  autoFocus
-                  value={selected}
-                  onChange={(e) => {
-                    setSelected(e.target.value);
-                    const np = products.find((p) => p.id === e.target.value);
-                    setPrice(
-                      (mode === "purchase"
-                        ? (np?.cost ?? 0)
-                        : (np?.price ?? 0)) / 100,
-                    );
-                  }}
-                  required
-                >
-                  <option value="" disabled>
-                    Selecione um produto
-                  </option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} · {p.capacity} ({p.stock} disponíveis)
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="line-table">
+                <div className="line-head" aria-hidden="true">
+                  <span>Item</span>
+                  <span>Produto</span>
+                  <span>Qtd.</span>
+                  <span>
+                    {mode === "sale" ? "Preço un. (R$)" : "Custo un. (R$)"}
+                  </span>
+                  <span>Subtotal</span>
+                  <span />
+                </div>
+                {lines.map((l, i) => {
+                  const lp = products.find((p) => p.id === l.productId);
+                  return (
+                    <div className="line-row" key={l.key}>
+                      <span className="line-index">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <label>
+                        <span className="sr-only">Produto do item {i + 1}</span>
+                        <select
+                          autoFocus={i === 0}
+                          value={l.productId}
+                          onChange={(e) => pickProduct(l.key, e.target.value)}
+                          required
+                        >
+                          <option value="" disabled>
+                            Selecione um produto
+                          </option>
+                          {products.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} · {p.capacity} ({p.stock} disponíveis)
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span className="sr-only">
+                          Quantidade do item {i + 1}
+                        </span>
+                        <input
+                          type="number"
+                          value={l.quantity}
+                          onChange={(e) =>
+                            patch(l.key, { quantity: Number(e.target.value) })
+                          }
+                          min="1"
+                          max={mode === "sale" ? (lp?.stock ?? 1) : 100000}
+                          step="1"
+                          required
+                        />
+                      </label>
+                      <label>
+                        <span className="sr-only">
+                          Valor unitário do item {i + 1}
+                        </span>
+                        <input
+                          type="number"
+                          value={l.price}
+                          onChange={(e) =>
+                            patch(l.key, { price: Number(e.target.value) })
+                          }
+                          min="0"
+                          max="1000000"
+                          step="0.01"
+                          required
+                        />
+                      </label>
+                      <span className="line-subtotal">
+                        {money(Math.round(l.price * 100) * l.quantity)}
+                      </span>
+                      <button
+                        type="button"
+                        className="icon-button line-remove"
+                        onClick={() => dropLine(l.key)}
+                        disabled={lines.length === 1}
+                        aria-label={`Remover item ${i + 1}`}
+                        title="Remover item"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                className="line-add"
+                onClick={addLine}
+                disabled={lines.length >= 20 || lines.length >= products.length}
+              >
+                <Plus size={15} />
+                Adicionar novo item
+              </button>
               <div className="form-grid">
-                <label>
-                  Quantidade
-                  <input
-                    type="number"
-                    value={qty}
-                    onChange={(e) => setQty(Number(e.target.value))}
-                    min="1"
-                    max={mode === "sale" ? (p?.stock ?? 0) : 100000}
-                    step="1"
-                    required
-                  />
-                </label>
-                <label>
-                  {mode === "sale"
-                    ? "Preço unitário (R$)"
-                    : "Custo unitário (R$)"}
-                  <input
-                    type="number"
-                    value={price}
-                    onChange={(e) => setPrice(Number(e.target.value))}
-                    min="0"
-                    max="1000000"
-                    step="0.01"
-                    required
-                  />
-                </label>
                 <label>
                   Data
                   <input
@@ -344,17 +452,23 @@ export default function OperationForm({
                 </label>
               </div>
               <div className="form-total">
-                <span>Total da {mode === "sale" ? "venda" : "compra"}</span>
-                <strong>{money(Math.round(price * 100) * qty)}</strong>
+                <span>
+                  Total da {mode === "sale" ? "venda" : "compra"} ·{" "}
+                  {lines.reduce((a, l) => a + l.quantity, 0)} un. em{" "}
+                  {lines.length} {lines.length === 1 ? "item" : "itens"}
+                </span>
+                <strong>{money(total)}</strong>
               </div>
-              {mode === "sale" && p && (
+              {short?.p && (
+                <div className="form-error" role="alert">
+                  Estoque insuficiente de {short.p.name}: {short.q} unidades
+                  pedidas, {short.p.stock} disponíveis.
+                </div>
+              )}
+              {mode === "sale" && !short && (
                 <div className="hint">
                   <Info size={16} />
-                  <span>
-                    Após a venda: {Math.max(0, p.stock - qty)} unidades. Imposto
-                    estimado:{" "}
-                    {money(Math.round((price * 100 * qty * p.tax) / 100))}.
-                  </span>
+                  <span>Imposto estimado sobre a venda: {money(estimatedTax)}.</span>
                 </div>
               )}
             </>
@@ -371,9 +485,7 @@ export default function OperationForm({
             <button
               className="primary"
               type="submit"
-              disabled={
-                busy || ((mode === "sale" || mode === "purchase") && !p)
-              }
+              disabled={busy || (operation && (incomplete || !!short))}
             >
               {busy
                 ? "Salvando…"

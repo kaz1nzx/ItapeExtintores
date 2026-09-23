@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useState, type CSSProperties, type FormEvent } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -10,6 +10,22 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
+import EmberField from "@/components/ember-field";
+import { Magnetic } from "@/components/motion";
+
+// Índice de sequência das animações de entrada, lido pelo CSS.
+const step = (i: number) => ({ "--i": i }) as CSSProperties;
+const specs = [
+  { label: "Estoque sempre à vista", icon: Boxes },
+  { label: "Clareza para suas decisões", icon: ChartNoAxesCombined },
+  { label: "Acesso protegido à sua gestão", icon: ShieldCheck },
+];
+const ticker = [
+  "Estoque em tempo real",
+  "Financeiro conectado",
+  "Relatórios prontos para impressão",
+  "Acesso individual protegido",
+];
 export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -41,44 +57,70 @@ export default function Login() {
   return (
     <main className="login-page">
       <section className="login-story">
-        <Link href="/" className="brand">
-          <span className="brand-mark">
-            <Flame />
-          </span>
-          <span>
-            itapê<span className="brand-sub">EXTINTORES</span>
-          </span>
-        </Link>
-        <div>
-          <span className="eyebrow">MAIS CONTROLE. MAIS TRANQUILIDADE.</span>
-          <h1>
-            Sua operação
+        <EmberField />
+        <div className="story-grid" aria-hidden="true" />
+        <div className="story-top">
+          <Link href="/" className="brand">
+            <Magnetic strength={7}>
+              <span className="brand-mark">
+                <Flame />
+              </span>
+            </Magnetic>
+            <span>
+              itapê<span className="brand-sub">EXTINTORES</span>
+            </span>
+          </Link>
+          <span className="story-code" aria-hidden="true">
+            CNAE 4789-0/99
             <br />
-            em boas mãos.
+            ITAPÊ · BRASIL
+          </span>
+        </div>
+        <div className="story-main">
+          <span className="eyebrow">Mais controle. Mais tranquilidade.</span>
+          <h1 className="display-xl">
+            <span className="line" style={step(0)}>
+              <span>Sua operação</span>
+            </span>
+            <span className="line" style={step(1)}>
+              <span>sob</span>
+            </span>
+            <span className="line" style={step(2)}>
+              <span>
+                <em>controle</em>
+              </span>
+            </span>
           </h1>
           <p>
             Do primeiro extintor em estoque ao resultado do mês. Tudo conectado,
             tudo no seu controle.
           </p>
-          <div className="story-feature">
-            <Boxes /> Estoque sempre à vista
-          </div>
-          <div className="story-feature">
-            <ChartNoAxesCombined /> Clareza para suas decisões
-          </div>
-          <div className="story-feature">
-            <ShieldCheck /> Acesso protegido à sua gestão
-          </div>
+          <ul className="spec-list">
+            {specs.map((s, i) => (
+              <li key={s.label} style={step(i)}>
+                <span className="spec-n">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                {s.label}
+                <s.icon aria-hidden="true" />
+              </li>
+            ))}
+          </ul>
         </div>
-        <small>Itapê Extintores · Gestão com confiança.</small>
-        <div className="story-orbit" aria-hidden="true">
-          <Flame />
+        <div className="story-foot">
+          <div className="story-ticker" aria-hidden="true">
+            <div className="ticker-track">
+              {[...ticker, ...ticker].map((t, i) => (
+                <span key={i}>{t}</span>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
       <section className="login-form">
         <div className="login-box">
           <span className="pill">
-            <span className="dot" /> SEU ESPAÇO DE GESTÃO
+            <span className="dot" /> Seu espaço de gestão
           </span>
           <h2>Bom ter você aqui.</h2>
           <p>Entre na sua conta para cuidar do que importa.</p>
@@ -125,7 +167,7 @@ export default function Login() {
               <ArrowRight size={18} />
             </button>
           </form>
-          <div className="login-divider">CONHEÇA O SISTEMA</div>
+          <div className="login-divider">Conheça o sistema</div>
           <Link className="button full" href="/demo">
             Explorar demonstração <ArrowRight size={16} />
           </Link>

@@ -100,6 +100,18 @@ export const commandSchema = z.discriminatedUnion("kind", [
     date,
     party: text,
   }),
+  // Vários produtos na mesma remessa. A data e a contraparte são
+  // compartilhadas; cada item vira uma movimentação, tudo em uma transação.
+  z.object({
+    kind: z.literal("batch"),
+    operation: z.enum(["sale", "purchase"]),
+    date,
+    party: text,
+    items: z
+      .array(z.object({ productId: text, quantity, unitPrice: cents }))
+      .min(1)
+      .max(20),
+  }),
   z.object({
     kind: z.literal("expense"),
     description: text,
@@ -116,7 +128,9 @@ export function applyCommand(
   createdAt = new Date().toISOString(),
 ): Store {
   const cmd = commandSchema.parse(input);
-  if (actor.role !== "admin" && cmd.kind !== "sale")
+  const selling =
+    cmd.kind === "sale" || (cmd.kind === "batch" && cmd.operation === "sale");
+  if (actor.role !== "admin" && !selling)
     throw new Error("Somente administradores podem executar esta ação.");
   const next = structuredClone(store);
   if (cmd.kind === "product") {
@@ -144,39 +158,70 @@ export function applyCommand(
     p.active = false;
   } else if (cmd.kind === "expense")
     next.expenses.push({ ...cmd, id, actor: actor.name, createdAt });
-  else {
-    const p = next.products.find((p) => p.id === cmd.productId && p.active);
-    if (!p) throw new Error("Produto não encontrado.");
-    if (cmd.kind === "sale" && p.stock < cmd.quantity)
-      throw new Error(`Estoque insuficiente. Disponível: ${p.stock} unidades.`);
-    const lastDate = next.movements
-      .filter((m) => m.productId === p.id)
-      .reduce((last, m) => (m.date > last ? m.date : last), "");
-    if (cmd.date < lastDate)
-      throw new Error(
-        "A data deve ser igual ou posterior à última movimentação deste produto.",
-      );
-    if (cmd.kind === "purchase") {
-      if (p.stock + cmd.quantity > 100_000)
-        throw new Error("Limite de estoque excedido.");
-      p.cost = Math.round(
-        (p.stock * p.cost + cmd.quantity * cmd.unitPrice) /
-          (p.stock + cmd.quantity),
-      );
-    }
-    next.movements.push({
-      ...cmd,
-      id,
-      productName: p.name,
-      unitCost: cmd.kind === "sale" ? p.cost : cmd.unitPrice,
-      tax: cmd.kind === "sale" ? p.tax : 0,
-      actor: actor.name,
-      createdAt,
-    });
-    p.stock += cmd.kind === "sale" ? -cmd.quantity : cmd.quantity;
-  }
+  else if (cmd.kind === "batch")
+    cmd.items.forEach((item, i) =>
+      registerMovement(
+        next,
+        item,
+        cmd.operation,
+        cmd,
+        actor,
+        `${id}-${i}`,
+        createdAt,
+      ),
+    );
+  else registerMovement(next, cmd, cmd.kind, cmd, actor, id, createdAt);
   next.version += 1;
   return next;
+}
+// Uma movimentação, compartilhada pelo comando simples e pelo lote. Os itens de
+// um lote são aplicados em sequência: o custo médio e o estoque de cada linha já
+// enxergam as linhas anteriores da mesma remessa.
+function registerMovement(
+  store: Store,
+  item: { productId: string; quantity: number; unitPrice: number },
+  kind: "sale" | "purchase",
+  shared: { date: string; party: string },
+  actor: User,
+  id: string,
+  createdAt: string,
+) {
+  const p = store.products.find((p) => p.id === item.productId && p.active);
+  if (!p) throw new Error("Produto não encontrado.");
+  if (kind === "sale" && p.stock < item.quantity)
+    throw new Error(
+      `Estoque insuficiente de ${p.name}. Disponível: ${p.stock} unidades.`,
+    );
+  const lastDate = store.movements
+    .filter((m) => m.productId === p.id)
+    .reduce((last, m) => (m.date > last ? m.date : last), "");
+  if (shared.date < lastDate)
+    throw new Error(
+      "A data deve ser igual ou posterior à última movimentação deste produto.",
+    );
+  if (kind === "purchase") {
+    if (p.stock + item.quantity > 100_000)
+      throw new Error("Limite de estoque excedido.");
+    p.cost = Math.round(
+      (p.stock * p.cost + item.quantity * item.unitPrice) /
+        (p.stock + item.quantity),
+    );
+  }
+  store.movements.push({
+    id,
+    productId: p.id,
+    productName: p.name,
+    kind,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+    unitCost: kind === "sale" ? p.cost : item.unitPrice,
+    tax: kind === "sale" ? p.tax : 0,
+    date: shared.date,
+    party: shared.party,
+    actor: actor.name,
+    createdAt,
+  });
+  p.stock += kind === "sale" ? -item.quantity : item.quantity;
 }
 export function summarize(store: Store, from: string, to: string) {
   const movements = store.movements.filter(
@@ -192,9 +237,8 @@ export function summarize(store: Store, from: string, to: string) {
   const expenses = store.expenses
     .filter((e) => e.date >= from && e.date <= to)
     .reduce((a, e) => a + e.amount, 0);
-  const purchases = movements
-    .filter((m) => m.kind === "purchase")
-    .reduce((a, m) => a + m.quantity * m.unitPrice, 0);
+  const restocks = movements.filter((m) => m.kind === "purchase");
+  const purchases = restocks.reduce((a, m) => a + m.quantity * m.unitPrice, 0);
   return {
     revenue,
     cogs,
@@ -203,8 +247,10 @@ export function summarize(store: Store, from: string, to: string) {
     purchases,
     profit: revenue - cogs - taxes - expenses,
     cash: revenue - purchases - taxes - expenses,
-    units: sales.reduce((a, m) => a + m.quantity, 0),
+    unitsSold: sales.reduce((a, m) => a + m.quantity, 0),
+    unitsBought: restocks.reduce((a, m) => a + m.quantity, 0),
     sales,
+    restocks,
   };
 }
 export function demoStore(): Store {
@@ -297,10 +343,38 @@ export function demoStore(): Store {
       createdAt: new Date().toISOString(),
     };
   });
+  // Algumas entradas de estoque para a demonstração mostrar também o volume
+  // comprado no período, e não só o vendido.
+  const restocks: Movement[] = (
+    [
+      ["abc4", 12, 6100, 18],
+      ["co2", 6, 18200, 14],
+      ["agua", 10, 9400, 9],
+      ["espuma", 8, 10800, 4],
+    ] as const
+  ).map(([productId, quantity, unitPrice, ago], i) => {
+    const p = products.find((x) => x.id === productId)!;
+    return {
+      id: `demo-entrada-${i}`,
+      productId: p.id,
+      productName: p.name,
+      kind: "purchase",
+      quantity,
+      unitPrice,
+      unitCost: unitPrice,
+      tax: 0,
+      date: daysBefore(today(), ago),
+      party: ["Distribuidora Central", "Extintores Brasil"][i % 2],
+      actor: "Demonstração",
+      createdAt: new Date().toISOString(),
+    };
+  });
   return {
     version: 0,
     products,
-    movements,
+    movements: [...movements, ...restocks].sort((a, b) =>
+      a.date.localeCompare(b.date),
+    ),
     expenses: [
       {
         id: "demo-exp",

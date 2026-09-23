@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Flame,
@@ -46,6 +46,7 @@ import {
 } from "@/lib/domain";
 import OperationForm, { type FormMode } from "./operation-form";
 import { Empty, Extinguisher, download } from "./primitives";
+import { CountUp, Reveal } from "./motion";
 import Chart from "./chart";
 
 const nav = [
@@ -66,6 +67,11 @@ const subtitles: Record<Page, string> = {
   settings: "Sua conta, seus dados e suas preferências.",
 };
 const displayDate = (date: string) => date.split("-").reverse().join("/");
+// Formatadores estáveis para o contador animado (CountUp recebe a função pronta).
+const integer = (n: number) => String(Math.round(n));
+const units = (n: number) => `${Math.round(n)} un.`;
+const signed = (n: number) =>
+  `${Math.round(n) > 0 ? "+" : ""}${Math.round(n)}`;
 export default function Workspace({
   initial,
   user,
@@ -492,7 +498,9 @@ export default function Workspace({
             <span className="user-avatar">AD</span>
           </div>
         </header>
-        <main id="content" className="content">
+        {/* key={page} remonta o bloco: o título recorta e os números recontam
+            a cada troca de seção. */}
+        <main id="content" className="content page-swap" key={page}>
           {demo && (
             <div className="demo-banner">
               <span>
@@ -508,9 +516,11 @@ export default function Workspace({
             <div>
               <span className="eyebrow">ITAPÊ EXTINTORES / GESTÃO</span>
               <h1>
-                {page === "overview"
-                  ? "Seu negócio, em dia."
-                  : nav.find((n) => n.id === page)?.label}
+                <span>
+                  {page === "overview"
+                    ? "Seu negócio, em dia."
+                    : nav.find((n) => n.id === page)?.label}
+                </span>
               </h1>
               <p>{subtitles[page]}</p>
             </div>
@@ -551,7 +561,9 @@ export default function Workspace({
           </div>
           {page !== "stock" && page !== "settings" && (
             <div className="period-bar">
-              <div className="segmented">
+              <div className="segmented" data-active={period}>
+                {/* Indicador que desliza entre as opções em vez de piscar. */}
+                <span className="segmented-thumb" aria-hidden="true" />
                 <button
                   className={period === "week" ? "selected" : ""}
                   onClick={() => {
@@ -617,37 +629,48 @@ export default function Workspace({
             page === "reports") && (
             <section className="metrics" aria-label="Indicadores do período">
               <Metric
-                title="Receita de vendas"
-                value={money(stats.revenue)}
-                detail={`${stats.sales.length} vendas no período`}
-                icon={CircleDollarSign}
-                color="red"
-              />
-              <Metric
+                index={1}
                 title="Custos e despesas"
-                value={money(stats.cogs + stats.expenses + stats.taxes)}
+                value={
+                  <CountUp
+                    value={stats.cogs + stats.expenses + stats.taxes}
+                    format={money}
+                  />
+                }
                 detail="Itens vendidos, despesas e impostos"
                 icon={ArrowDownLeft}
                 color="orange"
               />
               <Metric
+                index={2}
+                title="Receita de vendas"
+                value={<CountUp value={stats.revenue} format={money} />}
+                detail={`${stats.sales.length} vendas no período`}
+                icon={CircleDollarSign}
+                color="red"
+              />
+              <Metric
+                index={3}
                 title="Resultado estimado"
-                value={money(stats.profit)}
+                value={<CountUp value={stats.profit} format={money} />}
                 detail={`${stats.revenue ? ((stats.profit / stats.revenue) * 100).toFixed(1).replace(".", ",") : "0"}% de margem no período`}
                 icon={TrendingUp}
                 color="green"
                 highlight
               />
               <Metric
+                index={4}
                 title={
                   page === "overview"
                     ? "Produtos em estoque"
                     : "Compras de estoque"
                 }
                 value={
-                  page === "overview"
-                    ? `${stockUnits} un.`
-                    : money(stats.purchases)
+                  page === "overview" ? (
+                    <CountUp value={stockUnits} format={units} />
+                  ) : (
+                    <CountUp value={stats.purchases} format={money} />
+                  )
                 }
                 detail={
                   page === "overview"
@@ -668,7 +691,9 @@ export default function Workspace({
                     subtitle="Receita e resultado ao longo do período"
                   />
                   <div className="chart-summary">
-                    <strong>{money(stats.revenue)}</strong>
+                    <strong>
+                      <CountUp value={stats.revenue} format={money} />
+                    </strong>
                     <span>em vendas no período</span>
                   </div>
                   <Chart store={store} from={from} to={to} />
@@ -716,6 +741,7 @@ export default function Workspace({
                   </button>
                 </section>
               </div>
+              <Reveal>
               <section className="panel inventory-overview">
                 <PanelHeading
                   title="Seu estoque de extintores"
@@ -734,6 +760,8 @@ export default function Workspace({
                 />
                 {productTable(products.slice(0, 5), true)}
               </section>
+              </Reveal>
+              <Reveal delay={90}>
               <section className="quick-strip">
                 <span className="quick-icon">
                   <Flame size={23} />
@@ -751,6 +779,7 @@ export default function Workspace({
                   Registrar uma venda <ArrowRight size={16} />
                 </button>
               </section>
+              </Reveal>
             </>
           )}
           {page === "stock" && (
@@ -759,13 +788,19 @@ export default function Workspace({
                 <div>
                   <Boxes />
                   <span>
-                    Unidades disponíveis<strong>{stockUnits}</strong>
+                    Unidades disponíveis
+                    <strong>
+                      <CountUp value={stockUnits} format={integer} />
+                    </strong>
                   </span>
                 </div>
                 <div>
                   <Wallet />
                   <span>
-                    Valor do estoque a custo<strong>{money(stockValue)}</strong>
+                    Valor do estoque a custo
+                    <strong>
+                      <CountUp value={stockValue} format={money} />
+                    </strong>
                   </span>
                 </div>
                 <div>
@@ -773,7 +808,8 @@ export default function Workspace({
                   <span>
                     Produtos para repor
                     <strong>
-                      {low.length} <small>de {products.length} produtos</small>
+                      <CountUp value={low.length} format={integer} />{" "}
+                      <small>de {products.length} produtos</small>
                     </strong>
                   </span>
                 </div>
@@ -1032,6 +1068,47 @@ export default function Workspace({
               <div className="report-brand">
                 ITAPÊ EXTINTORES · RELATÓRIO FINANCEIRO
               </div>
+              <div className="volume-band">
+                <div>
+                  <span>Extintores vendidos</span>
+                  <strong>
+                    <CountUp value={stats.unitsSold} format={integer} />
+                    <small>un.</small>
+                  </strong>
+                  <small>
+                    em {stats.sales.length}{" "}
+                    {stats.sales.length === 1 ? "venda" : "vendas"}
+                  </small>
+                </div>
+                <div>
+                  <span>Extintores comprados</span>
+                  <strong>
+                    <CountUp value={stats.unitsBought} format={integer} />
+                    <small>un.</small>
+                  </strong>
+                  <small>
+                    em {stats.restocks.length}{" "}
+                    {stats.restocks.length === 1 ? "entrada" : "entradas"}
+                  </small>
+                </div>
+                <div>
+                  <span>Variação do estoque</span>
+                  <strong
+                    className={
+                      stats.unitsBought - stats.unitsSold < 0
+                        ? "negative"
+                        : "positive"
+                    }
+                  >
+                    <CountUp
+                      value={stats.unitsBought - stats.unitsSold}
+                      format={signed}
+                    />
+                    <small>un.</small>
+                  </strong>
+                  <small>compradas menos vendidas</small>
+                </div>
+              </div>
               <Chart store={store} from={from} to={to} />
               <div className="report-totals">
                 <Statement label="Receita" value={stats.revenue} />
@@ -1052,7 +1129,8 @@ export default function Workspace({
                   <thead>
                     <tr>
                       <th>Produto</th>
-                      <th>Unidades vendidas</th>
+                      <th>Un. vendidas</th>
+                      <th>Un. compradas</th>
                       <th>Receita</th>
                       <th>Custo dos itens</th>
                       <th>Impostos</th>
@@ -1064,7 +1142,12 @@ export default function Workspace({
                       const sales = stats.sales.filter(
                         (s) => s.productId === p.id,
                       );
-                      if (!sales.length) return null;
+                      const bought = stats.restocks
+                        .filter((m) => m.productId === p.id)
+                        .reduce((a, m) => a + m.quantity, 0);
+                      // O produto entra no relatório se teve qualquer
+                      // movimentação no período, comprada ou vendida.
+                      if (!sales.length && !bought) return null;
                       const qty = sales.reduce((a, s) => a + s.quantity, 0),
                         revenue = sales.reduce(
                           (a, s) => a + s.quantity * s.unitPrice,
@@ -1085,9 +1168,10 @@ export default function Workspace({
                       return (
                         <tr key={p.id}>
                           <td className="strong">
-                            {sales[0].productName} · {p.capacity}
+                            {p.name} · {p.capacity}
                           </td>
-                          <td>{qty}</td>
+                          <td className="units-cell">{qty}</td>
+                          <td className="units-cell">{bought}</td>
                           <td>{money(revenue)}</td>
                           <td>{money(cost)}</td>
                           <td>{money(tax)}</td>
@@ -1102,11 +1186,30 @@ export default function Workspace({
                       );
                     })}
                   </tbody>
+                  <tfoot>
+                    <tr>
+                      <td className="strong">Total do período</td>
+                      <td className="units-cell">{stats.unitsSold}</td>
+                      <td className="units-cell">{stats.unitsBought}</td>
+                      <td>{money(stats.revenue)}</td>
+                      <td>{money(stats.cogs)}</td>
+                      <td>{money(stats.taxes)}</td>
+                      <td
+                        className={
+                          stats.revenue - stats.cogs - stats.taxes < 0
+                            ? "negative"
+                            : "positive"
+                        }
+                      >
+                        {money(stats.revenue - stats.cogs - stats.taxes)}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
-              {!stats.sales.length && (
+              {!stats.sales.length && !stats.restocks.length && (
                 <Empty
-                  title="Nenhuma venda no período"
+                  title="Nenhuma movimentação no período"
                   description="Selecione outra semana ou mês para consultar o histórico."
                 />
               )}
@@ -1230,6 +1333,7 @@ export default function Workspace({
   );
 }
 function Metric({
+  index,
   title,
   value,
   detail,
@@ -1237,8 +1341,9 @@ function Metric({
   color,
   highlight = false,
 }: {
+  index: number;
   title: string;
-  value: string;
+  value: ReactNode;
   detail: string;
   icon: typeof Boxes;
   color: string;
@@ -1247,7 +1352,12 @@ function Metric({
   return (
     <article className={`metric ${highlight ? "highlight" : ""}`}>
       <div className="metric-heading">
-        <span>{title}</span>
+        <span>
+          <span className="metric-index">
+            {String(index).padStart(2, "0")}
+          </span>
+          {title}
+        </span>
         <span className={`metric-icon ${color}`}>
           <Icon size={18} />
         </span>

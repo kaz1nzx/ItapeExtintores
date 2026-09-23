@@ -229,3 +229,100 @@ test("resultado permite prejuízo sem ocultar valores negativos", () => {
   );
   assert.equal(summarize(s, today(), today()).profit, -6112);
 });
+
+
+const second = {
+  kind: "product",
+  name: "Extintor CO2",
+  sku: "EXT-002",
+  type: "CO₂",
+  capacity: "6 kg",
+  cost: 18500,
+  price: 32000,
+  tax: 10,
+  minimum: 5,
+};
+// Duas linhas na mesma remessa: estoque de ambos os produtos deve subir e as
+// duas movimentações devem compartilhar data e fornecedor.
+function twoProducts(): Store {
+  return applyCommand(stocked(), second, user, "q");
+}
+test("compra em lote registra cada item e compartilha data e fornecedor", () => {
+  const s = applyCommand(
+    twoProducts(),
+    {
+      kind: "batch",
+      operation: "purchase",
+      date: today(),
+      party: "Distribuidora Central",
+      items: [
+        { productId: "p", quantity: 5, unitPrice: 6200 },
+        { productId: "q", quantity: 4, unitPrice: 18500 },
+      ],
+    },
+    user,
+    "lote",
+  );
+  assert.equal(s.products.find((x) => x.id === "p")!.stock, 15);
+  assert.equal(s.products.find((x) => x.id === "q")!.stock, 4);
+  const fresh = s.movements.filter((m) => m.party === "Distribuidora Central");
+  assert.equal(fresh.length, 2);
+  assert.equal(new Set(fresh.map((m) => m.id)).size, 2);
+  assert.equal(summarize(s, today(), today()).unitsBought, 19);
+});
+test("lote com o mesmo produto duas vezes acumula custo médio", () => {
+  const s = applyCommand(
+    stocked(),
+    {
+      kind: "batch",
+      operation: "purchase",
+      date: today(),
+      party: "Fornecedor",
+      items: [
+        { productId: "p", quantity: 10, unitPrice: 8200 },
+        { productId: "p", quantity: 20, unitPrice: 4200 },
+      ],
+    },
+    user,
+    "lote",
+  );
+  assert.equal(s.products[0].stock, 40);
+  assert.equal(s.products[0].cost, 5700);
+});
+test("lote falho não altera o estoque de nenhum item", () => {
+  const before = twoProducts();
+  assert.throws(() =>
+    applyCommand(
+      before,
+      {
+        kind: "batch",
+        operation: "sale",
+        date: today(),
+        party: "Cliente",
+        items: [
+          { productId: "p", quantity: 2, unitPrice: 11000 },
+          { productId: "q", quantity: 99, unitPrice: 32000 },
+        ],
+      },
+      user,
+      "lote",
+    ),
+  );
+  assert.equal(before.products.find((x) => x.id === "p")!.stock, 10);
+  assert.equal(before.movements.filter((m) => m.kind === "sale").length, 0);
+});
+test("venda em lote soma unidades vendidas no período", () => {
+  const s = applyCommand(
+    twoProducts(),
+    {
+      kind: "batch",
+      operation: "sale",
+      date: today(),
+      party: "Condomínio Planalto",
+      items: [{ productId: "p", quantity: 3, unitPrice: 11000 }],
+    },
+    user,
+    "lote",
+  );
+  assert.equal(summarize(s, today(), today()).unitsSold, 3);
+});
