@@ -6,6 +6,7 @@ import {
   summarize,
   today,
   daysBefore,
+  addMonths,
   type Store,
   type User,
 } from "../src/lib/domain";
@@ -325,4 +326,108 @@ test("venda em lote soma unidades vendidas no período", () => {
     "lote",
   );
   assert.equal(summarize(s, today(), today()).unitsSold, 3);
+});
+
+// ---- Calendário de validades
+const sale = (extra: Record<string, unknown> = {}) => ({
+  kind: "sale",
+  productId: "p",
+  quantity: 2,
+  unitPrice: 11000,
+  date: today(),
+  party: "Condomínio Planalto",
+  ...extra,
+});
+test("venda agenda a validade de 12 meses para o cliente", () => {
+  const s = applyCommand(stocked(), sale({ phone: "(11) 98888-7777" }), user, "venda");
+  assert.equal(s.validities.length, 1);
+  const v = s.validities[0];
+  assert.equal(v.client, "Condomínio Planalto");
+  assert.equal(v.phone, "(11) 98888-7777");
+  assert.equal(v.item, "Extintor · 4 kg");
+  assert.equal(v.quantity, 2);
+  assert.equal(v.dueDate, addMonths(today(), 12));
+  assert.equal(v.movementId, "venda");
+  assert.equal(v.status, "pending");
+});
+test("venda sem agendamento não cria lembrete", () => {
+  const s = applyCommand(stocked(), sale({ track: false }), user, "venda");
+  assert.equal(s.validities.length, 0);
+  assert.equal(s.products[0].stock, 8);
+});
+test("compra nunca agenda validade", () => {
+  assert.equal(stocked().validities.length, 0);
+});
+test("venda em lote agenda uma validade por item", () => {
+  const s = applyCommand(
+    twoProducts(),
+    {
+      kind: "batch",
+      operation: "purchase",
+      date: today(),
+      party: "Fornecedor",
+      items: [{ productId: "q", quantity: 5, unitPrice: 18500 }],
+    },
+    user,
+    "entrada",
+  );
+  const sold = applyCommand(
+    s,
+    {
+      kind: "batch",
+      operation: "sale",
+      date: today(),
+      party: "Hotel Serra Azul",
+      items: [
+        { productId: "p", quantity: 3, unitPrice: 11000 },
+        { productId: "q", quantity: 1, unitPrice: 32000 },
+      ],
+    },
+    user,
+    "lote",
+  );
+  assert.deepEqual(
+    sold.validities.map((v) => [v.client, v.quantity]),
+    [
+      ["Hotel Serra Azul", 3],
+      ["Hotel Serra Azul", 1],
+    ],
+  );
+});
+test("vencimento corta o fim do mês como o Postgres", () => {
+  assert.equal(addMonths("2024-02-29", 12), "2025-02-28");
+  assert.equal(addMonths("2025-01-31", 12), "2026-01-31");
+  assert.equal(addMonths("2025-12-15", 12), "2026-12-15");
+});
+test("renovação encerra o lembrete e abre o próximo ciclo", () => {
+  const start = daysBefore(today(), 360);
+  let s = applyCommand(
+    emptyStore(),
+    { kind: "validity", client: "Clínica Vida", item: "CO2 · 6 kg", quantity: 3, startDate: start },
+    user,
+    "manual",
+  );
+  assert.equal(s.validities[0].dueDate, addMonths(start, 12));
+  s = applyCommand(s, { kind: "validity_renew", validityId: "manual", date: today() }, user, "renova");
+  const [old, next] = s.validities;
+  assert.equal(old.status, "renewed");
+  assert.equal(old.resolvedAt, today());
+  assert.equal(next.status, "pending");
+  assert.equal(next.client, "Clínica Vida");
+  assert.equal(next.dueDate, addMonths(today(), 12));
+  assert.throws(() =>
+    applyCommand(s, { kind: "validity_renew", validityId: "manual", date: today() }, user, "de-novo"),
+  );
+});
+test("dispensar tira o lembrete da lista pendente", () => {
+  const s = applyCommand(
+    applyCommand(stocked(), sale(), user, "venda"),
+    { kind: "validity_dismiss", validityId: "venda-validade" },
+    user,
+    "dispensa",
+  );
+  assert.equal(s.validities[0].status, "dismissed");
+});
+test("telefone com letras é recusado", () => {
+  assert.throws(() => applyCommand(stocked(), sale({ phone: "ligar amanhã" }), user, "venda"));
 });

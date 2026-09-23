@@ -37,10 +37,11 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 1. Entre na conta real.
 2. Em **Estoque → Novo produto**, informe código, tipo, capacidade, custo, preço de venda, estoque mínimo e alíquota.
 3. Em **Entrada de estoque**, registre as quantidades, o custo de compra e o fornecedor. O cadastro começa com estoque zero.
-4. Use **Nova venda** para registrar cliente, quantidade, preço e data. A baixa de estoque acontece na mesma transação da venda.
-5. Lance aluguel, transporte e outros gastos em **Financeiro → Nova despesa**. Não lance a compra de extintores novamente como despesa.
-6. Em **Relatórios**, selecione semana ou mês; baixe CSV ou use **Imprimir / PDF**. Para gerar PDF, escolha “Salvar como PDF” na janela de impressão.
-7. Em **Configurações**, exporte uma cópia JSON dos registros quando necessário.
+4. Use **Nova venda** para registrar cliente, quantidade, preço e data. A baixa de estoque acontece na mesma transação da venda. Informe o WhatsApp do cliente e mantenha **Agendar lembrete de validade** marcado: os extintores vendidos entram no calendário com vencimento em 12 meses.
+5. Em **Validades**, acompanhe quem precisa de contato: o cliente aparece 30 dias antes do vencimento, com **Avisar** (abre o WhatsApp com a mensagem pronta), **Renovar** (registra a recarga e abre o próximo ciclo de 12 meses) e dispensa. Recargas feitas fora do sistema entram por **Registrar validade**.
+6. Lance aluguel, transporte e outros gastos em **Financeiro → Nova despesa**. Não lance a compra de extintores novamente como despesa.
+7. Em **Relatórios**, selecione semana ou mês; baixe CSV ou use **Imprimir / PDF**. Para gerar PDF, escolha “Salvar como PDF” na janela de impressão.
+8. Em **Configurações**, exporte uma cópia JSON dos registros quando necessário.
 
 ## O que foi implementado
 
@@ -48,6 +49,8 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 - Cadastro e edição de produtos, busca, filtros e paginação.
 - Alertas por estoque mínimo e arquivamento de produtos sem saldo.
 - Compras com custo médio ponderado, vendas com baixa de estoque e histórico de movimentações.
+- Compras e vendas com vários produtos na mesma remessa, registradas em uma única transação.
+- Calendário de validades: cada venda agenda o vencimento de 12 meses para o cliente; aviso 30 dias antes na Visão geral, no menu e na barra superior; mensagem pronta no WhatsApp; renovação que reinicia o ciclo.
 - Valores de custo, preço e alíquota preservados em cada venda.
 - Despesas operacionais, composição do resultado e saldo operacional estimado.
 - Relatórios semanais (sete dias terminando na data escolhida) e mensais (mês calendário, até hoje no mês atual).
@@ -88,7 +91,9 @@ O salvamento depende da conexão com o Supabase. A interface responde imediatame
 
 `database/schema.sql` documenta a instalação em um banco novo. **Não execute novamente no projeto já configurado**: os objetos já existem. `database/hardening-existing-trigger.sql` registra a restrição aplicada à função preexistente de RLS automático.
 
-`database/multi-item-batch.sql` habilita compras e vendas com vários produtos na mesma remessa. **Execute uma vez** no SQL Editor do projeto já configurado: é aditivo e substitui apenas `itape_private.apply_command`, sem tocar em tabelas, políticas ou dados. Enquanto não for aplicado, operações de item único seguem funcionando normalmente e apenas as de dois ou mais produtos são recusadas com "Operação desconhecida.".
+`database/upgrade.sql` é a atualização cumulativa do banco: remessas com vários produtos e o calendário de validades. **Execute no SQL Editor** do projeto já configurado (em um banco novo, depois do `schema.sql`). Pode ser executado mais de uma vez: cria só o que falta (a tabela `itape_validities`, com RLS de leitura pelo dono) e substitui `itape_state` e `itape_private.apply_command` pela versão atual, sem remover tabelas, políticas ou dados. Enquanto não for aplicado, o sistema segue funcionando como antes: a página **Validades** mostra o aviso de atualização, a venda não oferece o lembrete e remessas com vários produtos são recusadas com uma mensagem que indica este arquivo. `database/multi-item-batch.sql` foi incorporado a ele e hoje não faz nada.
+
+`database/verify.sql` roda os testes de integração com uma conta sintética e desfaz tudo ao final; depois do `upgrade.sql`, deve responder com `PASS`.
 
 ```sh
 npm test

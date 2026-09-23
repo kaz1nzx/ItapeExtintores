@@ -1,5 +1,6 @@
 -- Integration checks with a synthetic account, entirely rolled back.
 -- Does not read or change any existing authentication account or business row.
+-- Requires database/upgrade.sql (multi-item batches and the validity calendar).
 begin;
 select set_config('itape.test_uid', gen_random_uuid()::text, true);
 select set_config('itape.test_product', gen_random_uuid()::text, true);
@@ -15,6 +16,7 @@ declare
   p uuid := current_setting('itape.test_product')::uuid;
   purchase_id uuid := current_setting('itape.test_purchase')::uuid;
   sale_id uuid := gen_random_uuid();
+  manual_id uuid := gen_random_uuid();
   d text := (now() at time zone 'America/Sao_Paulo')::date::text;
   blocked boolean;
 begin
@@ -43,9 +45,27 @@ begin
   blocked := false;
   begin update public.itape_products set stock = 999 where id = p; exception when insufficient_privilege then blocked := true; end;
   if not blocked then raise exception 'Test failed: direct stock update accepted'; end if;
+  -- Validity calendar: the sale above already scheduled its 12-month expiry.
+  s := public.itape_state();
+  if coalesce(jsonb_array_length(s->'validities'), -1) <> 1 or s->'validities'->0->>'movementId' <> sale_id::text or s->'validities'->0->>'dueDate' <> ((d::date + interval '12 months')::date)::text then raise exception 'Test failed: sale schedules validity'; end if;
+  s := public.itape_command(jsonb_build_object('kind','batch','operation','sale','date',d,'party','Fixture batch client','phone','(11) 3000-0000','items',jsonb_build_array(jsonb_build_object('productId',p,'quantity',1,'unitPrice',11000),jsonb_build_object('productId',p,'quantity',2,'unitPrice',10500))), gen_random_uuid(), 4);
+  if (s->'products'->0->>'stock')::int <> 11 or jsonb_array_length(s->'movements') <> 5 or coalesce(jsonb_array_length(s->'validities'), -1) <> 3 then raise exception 'Test failed: batch sale'; end if;
+  s := public.itape_command(jsonb_build_object('kind','sale','productId',p,'quantity',1,'unitPrice',11000,'date',d,'party','Untracked client','track',false), gen_random_uuid(), 5);
+  if coalesce(jsonb_array_length(s->'validities'), -1) <> 3 then raise exception 'Test failed: untracked sale scheduled a validity'; end if;
+  s := public.itape_command(jsonb_build_object('kind','validity','client','Fixture recharge','item','Extintor CO2 · 6 kg','quantity',4,'startDate',d), manual_id, 6);
+  s := public.itape_command(jsonb_build_object('kind','validity_renew','validityId',manual_id,'date',d), gen_random_uuid(), 7);
+  if (select status from public.itape_validities where id = manual_id) <> 'renewed' or (select count(*) from public.itape_validities where client = 'Fixture recharge' and status = 'pending') <> 1 then raise exception 'Test failed: renewal'; end if;
+  blocked := false;
+  begin perform public.itape_command(jsonb_build_object('kind','validity_renew','validityId',manual_id,'date',d), gen_random_uuid(), 8); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: validity renewed twice'; end if;
+  s := public.itape_command(jsonb_build_object('kind','validity_dismiss','validityId',(select id from public.itape_validities where client = 'Fixture batch client' and status = 'pending' limit 1)), gen_random_uuid(), 8);
+  if (select count(*) from public.itape_validities where status = 'dismissed') <> 1 then raise exception 'Test failed: dismissal'; end if;
+  blocked := false;
+  begin update public.itape_validities set due_date = d::date where true; exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'Test failed: direct validity update accepted'; end if;
   perform set_config('request.jwt.claims', jsonb_build_object('sub',gen_random_uuid(),'role','authenticated')::text,true);
   s := public.itape_state();
-  if jsonb_array_length(s->'products') <> 0 or jsonb_array_length(s->'movements') <> 0 then raise exception 'Test failed: RLS isolation'; end if;
+  if jsonb_array_length(s->'products') <> 0 or jsonb_array_length(s->'movements') <> 0 or coalesce(jsonb_array_length(s->'validities'), -1) <> 0 then raise exception 'Test failed: RLS isolation'; end if;
 end;
 $$;
 reset role;
@@ -58,5 +78,5 @@ begin
 end;
 $$;
 reset role;
-select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, owner isolation, anonymous denial' as verification;
+select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, multi-item batch, validity scheduling, renewal, dismissal, owner isolation, anonymous denial' as verification;
 rollback;

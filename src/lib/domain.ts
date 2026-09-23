@@ -35,11 +35,28 @@ export type Expense = {
   actor: string;
   createdAt: string;
 };
+// Vencimento da recarga de extintores de um cliente. Nasce de uma venda (ou é
+// registrado à mão, para recargas feitas fora do sistema) e fica pendente até
+// ser renovado ou dispensado.
+export type Validity = {
+  id: string;
+  client: string;
+  phone: string;
+  item: string;
+  quantity: number;
+  startDate: string;
+  dueDate: string;
+  status: "pending" | "renewed" | "dismissed";
+  movementId: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+};
 export type Store = {
   version: number;
   products: Product[];
   movements: Movement[];
   expenses: Expense[];
+  validities: Validity[];
 };
 export type User = { id: string; name: string; role: "admin" | "operator" };
 export const emptyStore = (): Store => ({
@@ -47,6 +64,12 @@ export const emptyStore = (): Store => ({
   products: [],
   movements: [],
   expenses: [],
+  validities: [],
+});
+// Um banco ainda sem a atualização de validades não devolve a lista.
+export const withDefaults = (store: Store): Store => ({
+  ...store,
+  validities: store.validities ?? [],
 });
 export const money = (cents: number) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -63,6 +86,37 @@ export function daysBefore(date: string, days: number) {
   d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString().slice(0, 10);
 }
+// Validade da recarga, contada a partir da venda ou da recarga.
+export const VALIDITY_MONTHS = 12;
+// A partir de quantos dias antes do vencimento o cliente entra na lista de
+// contato.
+export const ALERT_DAYS = 30;
+export function addMonths(date: string, months: number) {
+  const [y, m, d] = date.split("-").map(Number);
+  const index = y * 12 + (m - 1) + months;
+  const year = Math.floor(index / 12);
+  const month = index % 12;
+  // Mesmo corte de fim de mês do Postgres em date + interval: 29/02 + 12
+  // meses vira 28/02, e o servidor e a tela sempre concordam na data.
+  const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(Math.min(d, last)).padStart(2, "0")}`;
+}
+export const daysBetween = (from: string, to: string) =>
+  Math.round(
+    (Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) /
+      86400000,
+  );
+export type Urgency = "overdue" | "soon" | "upcoming" | "later";
+export function urgency(dueDate: string, now = today()): Urgency {
+  const d = daysBetween(now, dueDate);
+  return d < 0
+    ? "overdue"
+    : d <= ALERT_DAYS
+      ? "soon"
+      : d <= 90
+        ? "upcoming"
+        : "later";
+}
 const text = z.string().trim().min(1).max(120);
 const cents = z.number().int().min(0).max(100_000_000);
 const quantity = z.number().int().min(1).max(100_000);
@@ -78,6 +132,11 @@ const date = z
       v >= "2000-01-01"
     );
   }, "Informe uma data válida, até hoje.");
+const phone = z
+  .string()
+  .trim()
+  .max(30)
+  .regex(/^[0-9+(). -]*$/, "Informe um telefone válido.");
 export const commandSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("product"),
@@ -92,6 +151,8 @@ export const commandSchema = z.discriminatedUnion("kind", [
     minimum: z.number().int().min(0).max(100_000),
   }),
   z.object({ kind: z.literal("archive"), productId: text }),
+  // Em vendas, `track` (padrão: sim) agenda a validade de 12 meses para o
+  // cliente, e `phone` guarda o contato para o aviso. Compras ignoram ambos.
   z.object({
     kind: z.enum(["sale", "purchase"]),
     productId: text,
@@ -99,6 +160,8 @@ export const commandSchema = z.discriminatedUnion("kind", [
     unitPrice: cents,
     date,
     party: text,
+    phone: phone.optional(),
+    track: z.boolean().optional(),
   }),
   // Vários produtos na mesma remessa. A data e a contraparte são
   // compartilhadas; cada item vira uma movimentação, tudo em uma transação.
@@ -107,11 +170,25 @@ export const commandSchema = z.discriminatedUnion("kind", [
     operation: z.enum(["sale", "purchase"]),
     date,
     party: text,
+    phone: phone.optional(),
+    track: z.boolean().optional(),
     items: z
       .array(z.object({ productId: text, quantity, unitPrice: cents }))
       .min(1)
       .max(20),
   }),
+  // Validade registrada à mão: recargas e extintores que não passaram por uma
+  // venda no sistema.
+  z.object({
+    kind: z.literal("validity"),
+    client: text,
+    phone: phone.optional(),
+    item: text,
+    quantity,
+    startDate: date,
+  }),
+  z.object({ kind: z.literal("validity_renew"), validityId: text, date }),
+  z.object({ kind: z.literal("validity_dismiss"), validityId: text }),
   z.object({
     kind: z.literal("expense"),
     description: text,
@@ -133,6 +210,7 @@ export function applyCommand(
   if (actor.role !== "admin" && !selling)
     throw new Error("Somente administradores podem executar esta ação.");
   const next = structuredClone(store);
+  next.validities ??= [];
   if (cmd.kind === "product") {
     if (
       next.products.some(
@@ -170,7 +248,48 @@ export function applyCommand(
         createdAt,
       ),
     );
-  else registerMovement(next, cmd, cmd.kind, cmd, actor, id, createdAt);
+  else if (cmd.kind === "validity")
+    next.validities.push({
+      id,
+      client: cmd.client,
+      phone: cmd.phone ?? "",
+      item: cmd.item,
+      quantity: cmd.quantity,
+      startDate: cmd.startDate,
+      dueDate: addMonths(cmd.startDate, VALIDITY_MONTHS),
+      status: "pending",
+      movementId: null,
+      resolvedAt: null,
+      createdAt,
+    });
+  else if (cmd.kind === "validity_renew" || cmd.kind === "validity_dismiss") {
+    const v = next.validities.find(
+      (v) => v.id === cmd.validityId && v.status === "pending",
+    );
+    if (!v) throw new Error("Validade não encontrada ou já resolvida.");
+    if (cmd.kind === "validity_dismiss") {
+      v.status = "dismissed";
+      v.resolvedAt = today();
+    } else {
+      if (cmd.date < v.startDate)
+        throw new Error(
+          "A renovação deve ser igual ou posterior ao início da validade.",
+        );
+      v.status = "renewed";
+      v.resolvedAt = cmd.date;
+      // A recarga reinicia o ciclo: um novo lembrete para o mesmo cliente.
+      next.validities.push({
+        ...v,
+        id,
+        startDate: cmd.date,
+        dueDate: addMonths(cmd.date, VALIDITY_MONTHS),
+        status: "pending",
+        movementId: null,
+        resolvedAt: null,
+        createdAt,
+      });
+    }
+  } else registerMovement(next, cmd, cmd.kind, cmd, actor, id, createdAt);
   next.version += 1;
   return next;
 }
@@ -181,7 +300,7 @@ function registerMovement(
   store: Store,
   item: { productId: string; quantity: number; unitPrice: number },
   kind: "sale" | "purchase",
-  shared: { date: string; party: string },
+  shared: { date: string; party: string; phone?: string; track?: boolean },
   actor: User,
   id: string,
   createdAt: string,
@@ -222,6 +341,22 @@ function registerMovement(
     createdAt,
   });
   p.stock += kind === "sale" ? -item.quantity : item.quantity;
+  // Cada extintor vendido volta a ser negócio em 12 meses: a validade já nasce
+  // agendada para o cliente da venda.
+  if (kind === "sale" && shared.track !== false)
+    store.validities.push({
+      id: `${id}-validade`,
+      client: shared.party,
+      phone: shared.phone ?? "",
+      item: `${p.name} · ${p.capacity}`,
+      quantity: item.quantity,
+      startDate: shared.date,
+      dueDate: addMonths(shared.date, VALIDITY_MONTHS),
+      status: "pending",
+      movementId: id,
+      resolvedAt: null,
+      createdAt,
+    });
 }
 export function summarize(store: Store, from: string, to: string) {
   const movements = store.movements.filter(
@@ -369,9 +504,63 @@ export function demoStore(): Store {
       createdAt: new Date().toISOString(),
     };
   });
+  // Carteira fictícia de clientes. Os vencimentos do histórico caem entre
+  // algumas semanas atrás e os próximos meses, para o calendário da
+  // demonstração ter vencidos, avisos e próximos.
+  const book: [string, string][] = [
+    ["Mercado Bom Preço", "(11) 98761-2040"],
+    ["Auto Peças Silva", "(11) 97654-3321"],
+    ["Condomínio Planalto", "(11) 99812-7765"],
+    ["Farmácia Popular", "(11) 96543-1188"],
+    ["Escola Municipal Aurora", "(11) 3345-9087"],
+    ["Padaria Pão Quente", "(11) 98420-5566"],
+    ["Clínica Vida", "(11) 97731-4402"],
+    ["Oficina do Zé", "(11) 99108-2290"],
+    ["Restaurante Sabor Caseiro", "(11) 96690-7713"],
+    ["Hotel Serra Azul", "(11) 3021-4455"],
+    ["Academia Movimento", "(11) 98877-6610"],
+  ];
+  const phoneOf = new Map(book);
+  const history: Validity[] = [383, 371, 366, 362, 355, 349, 341, 330, 318, 301, 290].map(
+    (ago, i) => {
+      const [client, phone] = book[(i + 4) % book.length];
+      const p = products[i % products.length];
+      const startDate = daysBefore(today(), ago);
+      return {
+        id: `demo-validade-${i}`,
+        client,
+        phone,
+        item: `${p.name} · ${p.capacity}`,
+        quantity: [4, 2, 6, 1, 3, 8, 2, 5, 3, 2, 4][i],
+        startDate,
+        dueDate: addMonths(startDate, VALIDITY_MONTHS),
+        status: "pending",
+        movementId: null,
+        resolvedAt: null,
+        createdAt: new Date().toISOString(),
+      };
+    },
+  );
+  const fromSales: Validity[] = movements.map((m) => {
+    const p = products.find((x) => x.id === m.productId)!;
+    return {
+      id: `${m.id}-validade`,
+      client: m.party,
+      phone: phoneOf.get(m.party) ?? "",
+      item: `${p.name} · ${p.capacity}`,
+      quantity: m.quantity,
+      startDate: m.date,
+      dueDate: addMonths(m.date, VALIDITY_MONTHS),
+      status: "pending",
+      movementId: m.id,
+      resolvedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+  });
   return {
     version: 0,
     products,
+    validities: [...history, ...fromSales],
     movements: [...movements, ...restocks].sort((a, b) =>
       a.date.localeCompare(b.date),
     ),

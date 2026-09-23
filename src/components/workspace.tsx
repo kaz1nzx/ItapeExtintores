@@ -32,6 +32,7 @@ import {
   ShieldCheck,
   Database,
   ArrowRight,
+  CalendarClock,
 } from "lucide-react";
 import {
   applyCommand,
@@ -39,20 +40,29 @@ import {
   type Product,
   type Store,
   type User,
+  type Validity,
+  ALERT_DAYS,
   money,
   summarize,
   today,
   daysBefore,
+  daysBetween,
+  withDefaults,
 } from "@/lib/domain";
 import OperationForm, { type FormMode } from "./operation-form";
 import { Empty, Extinguisher, download } from "./primitives";
 import { CountUp, Reveal } from "./motion";
 import Chart from "./chart";
+import ValidityPage, {
+  ValidityStrip,
+  ValidityUpgradeNotice,
+} from "./validity";
 
 const nav = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "stock", label: "Estoque", icon: Boxes },
   { id: "movements", label: "Movimentações", icon: ArrowLeftRight },
+  { id: "validity", label: "Validades", icon: CalendarClock },
   { id: "finance", label: "Financeiro", icon: Wallet },
   { id: "reports", label: "Relatórios", icon: FileChartColumn },
   { id: "settings", label: "Configurações", icon: Settings2 },
@@ -62,6 +72,7 @@ const subtitles: Record<Page, string> = {
   overview: "Uma visão clara de tudo que movimenta o seu negócio.",
   stock: "Cada produto no lugar certo. Cada unidade sob controle.",
   movements: "Acompanhe as entradas e saídas da sua operação.",
+  validity: "Cada extintor vendido, com a data certa para voltar ao cliente.",
   finance: "Entenda seus custos e acompanhe seus resultados.",
   reports: "Os números que ajudam a decidir o próximo passo.",
   settings: "Sua conta, seus dados e suas preferências.",
@@ -81,7 +92,15 @@ export default function Workspace({
   user: User;
   demo?: boolean;
 }) {
-  const [store, setStore] = useState(initial);
+  const [store, setStore] = useState(() => withDefaults(initial));
+  // Um banco sem database/upgrade.sql não devolve a lista de validades. Nesse
+  // caso o calendário fica guardado e a venda não promete um lembrete que o
+  // banco não teria como gravar.
+  const [ready, setReady] = useState(() => Array.isArray(initial.validities));
+  function receive(data: Store) {
+    setReady(Array.isArray(data.validities));
+    setStore(withDefaults(data));
+  }
   const [page, setPage] = useState<Page>("overview");
   const [period, setPeriod] = useState<"week" | "month">("month");
   const [anchor, setAnchor] = useState(today());
@@ -92,6 +111,7 @@ export default function Workspace({
   const [form, setForm] = useState<{
     mode: FormMode;
     product?: Product;
+    validity?: Validity;
   } | null>(null);
   const [notice, setNotice] = useState<{
     message: string;
@@ -126,6 +146,10 @@ export default function Workspace({
   const stats = useMemo(() => summarize(store, from, to), [store, from, to]);
   const products = store.products.filter((p) => p.active);
   const low = products.filter((p) => p.stock <= p.minimum);
+  // Clientes a contatar: vencidos ou vencendo dentro da janela de aviso.
+  const dueSoon = store.validities.filter(
+    (v) => v.status === "pending" && daysBetween(today(), v.dueDate) <= ALERT_DAYS,
+  );
   const stockUnits = products.reduce((a, p) => a + p.stock, 0);
   const stockValue = products.reduce((a, p) => a + p.stock * p.cost, 0);
   const filteredProducts = products.filter(
@@ -149,9 +173,9 @@ export default function Workspace({
     setTablePage(0);
     setMobileMenu(false);
   }
-  function open(mode: FormMode, product?: Product) {
+  function open(mode: FormMode, product?: Product, validity?: Validity) {
     if (busy.current) return;
-    setForm({ mode, product });
+    setForm({ mode, product, validity });
   }
   async function save(command: Command, requestId: string) {
     if (busy.current) throw new Error("Aguarde a operação em andamento.");
@@ -177,7 +201,7 @@ export default function Workspace({
           }
           throw new Error(result.error);
         }
-        setStore(result);
+        receive(result);
         setSynced(
           new Date().toLocaleTimeString("pt-BR", {
             hour: "2-digit",
@@ -191,7 +215,8 @@ export default function Workspace({
           : "Registro salvo com sucesso.",
       });
     } catch (e) {
-      setStore(recovery ?? before);
+      if (recovery) receive(recovery);
+      else setStore(before);
       // A lost response can mean the database committed. Repeating the same
       // requestId is safe: the database records and deduplicates every command.
       if (
@@ -220,7 +245,7 @@ export default function Workspace({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setStore(data);
+      receive(data);
       setSynced(
         new Date().toLocaleTimeString("pt-BR", {
           hour: "2-digit",
@@ -415,6 +440,14 @@ export default function Workspace({
                 {n.id === "stock" && (
                   <span className="nav-count">{products.length}</span>
                 )}
+                {n.id === "validity" && dueSoon.length > 0 && (
+                  <span
+                    className="nav-count alert"
+                    aria-label={`${dueSoon.length} para contatar`}
+                  >
+                    {dueSoon.length}
+                  </span>
+                )}
               </button>
             ))}
         </nav>
@@ -495,6 +528,15 @@ export default function Workspace({
               <Bell size={19} />
               {low.length > 0 && <i />}
             </button>
+            <button
+              className="icon-button notification"
+              aria-label={`${dueSoon.length} validades de clientes a vencer`}
+              title="Validades a vencer"
+              onClick={() => go("validity")}
+            >
+              <CalendarClock size={19} />
+              {dueSoon.length > 0 && <i />}
+            </button>
             <span className="user-avatar">AD</span>
           </div>
         </header>
@@ -535,7 +577,7 @@ export default function Workspace({
                   Entrada de estoque
                 </button>
               )}
-              {page !== "settings" && (
+              {page !== "settings" && (page !== "validity" || ready) && (
                 <button
                   className="primary"
                   onClick={() =>
@@ -544,7 +586,9 @@ export default function Workspace({
                         ? "product"
                         : page === "finance"
                           ? "expense"
-                          : "sale",
+                          : page === "validity"
+                            ? "validity"
+                            : "sale",
                     )
                   }
                   disabled={saving}
@@ -554,12 +598,14 @@ export default function Workspace({
                     ? "Novo produto"
                     : page === "finance"
                       ? "Nova despesa"
-                      : "Nova venda"}
+                      : page === "validity"
+                        ? "Registrar validade"
+                        : "Nova venda"}
                 </button>
               )}
             </div>
           </div>
-          {page !== "stock" && page !== "settings" && (
+          {page !== "stock" && page !== "settings" && page !== "validity" && (
             <div className="period-bar">
               <div className="segmented" data-active={period}>
                 {/* Indicador que desliza entre as opções em vez de piscar. */}
@@ -684,6 +730,12 @@ export default function Workspace({
           )}
           {page === "overview" && (
             <>
+              {ready && (
+                <ValidityStrip
+                  validities={store.validities}
+                  onOpen={() => go("validity")}
+                />
+              )}
               <div className="overview-grid">
                 <section className="panel chart-panel">
                   <PanelHeading
@@ -781,6 +833,17 @@ export default function Workspace({
               </section>
               </Reveal>
             </>
+          )}
+          {page === "validity" && !ready && <ValidityUpgradeNotice />}
+          {page === "validity" && ready && (
+            <ValidityPage
+              validities={store.validities}
+              demo={demo}
+              busy={saving}
+              onCreate={() => open("validity")}
+              onRenew={(v) => open("renew", undefined, v)}
+              onDismiss={(v) => open("dismiss", undefined, v)}
+            />
           )}
           {page === "stock" && (
             <>
@@ -1308,6 +1371,8 @@ export default function Workspace({
         <OperationForm
           mode={form.mode}
           product={form.product}
+          validity={form.validity}
+          schedules={ready}
           products={products}
           close={() => setForm(null)}
           save={save}

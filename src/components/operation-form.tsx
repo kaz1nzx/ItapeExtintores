@@ -1,34 +1,81 @@
 "use client";
 import { useState, useRef, type FormEvent } from "react";
 import { Info, ArrowRight, Plus, Trash2 } from "lucide-react";
-import { type Command, type Product, money, today } from "@/lib/domain";
+import {
+  ALERT_DAYS,
+  VALIDITY_MONTHS,
+  addMonths,
+  money,
+  today,
+  type Command,
+  type Product,
+  type Validity,
+} from "@/lib/domain";
 import { Modal } from "./primitives";
-export type FormMode = "product" | "sale" | "purchase" | "expense" | "archive";
+export type FormMode =
+  | "product"
+  | "sale"
+  | "purchase"
+  | "expense"
+  | "archive"
+  | "validity"
+  | "renew"
+  | "dismiss";
 const titles: Record<FormMode, string> = {
   product: "Cadastrar produto",
   sale: "Registrar venda",
   purchase: "Entrada de estoque",
   expense: "Registrar despesa",
   archive: "Arquivar produto",
+  validity: "Registrar validade",
+  renew: "Renovar validade",
+  dismiss: "Dispensar lembrete",
 };
+const display = (date: string) => date.split("-").reverse().join("/");
+// O campo de data fica vazio por um instante enquanto a pessoa digita.
+const dueFrom = (date: string) =>
+  /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? display(addMonths(date, VALIDITY_MONTHS))
+    : "—";
+const phoneField = (
+  <input
+    name="phone"
+    type="tel"
+    inputMode="tel"
+    autoComplete="off"
+    placeholder="(11) 99999-9999"
+    maxLength={30}
+    pattern="[0-9+(). \-]*"
+    title="Use números, espaços, parênteses, ponto, + e -"
+  />
+);
 // Uma linha da remessa. O valor unitário fica em reais enquanto está no campo;
 // só vira centavos no envio.
 type Line = { key: string; productId: string; quantity: number; price: number };
 export default function OperationForm({
   mode,
   product,
+  validity,
   products,
   save,
   close,
+  schedules = true,
 }: {
   mode: FormMode;
   product?: Product;
+  validity?: Validity;
   products: Product[];
   save: (cmd: Command, requestId: string) => Promise<void>;
   close: () => void;
+  // Falso enquanto o banco não tem database/upgrade.sql: a venda não oferece
+  // um lembrete que não seria gravado.
+  schedules?: boolean;
 }) {
+  const tracking = mode === "sale" && schedules;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Controlado para mostrar, ao vivo, quando a validade vai vencer.
+  const [date, setDate] = useState(today());
   const unitFor = (p?: Product) =>
     (mode === "purchase" ? (p?.cost ?? 0) : (p?.price ?? 0)) / 100;
   const makeLine = (p?: Product): Line => ({
@@ -118,7 +165,32 @@ export default function OperationForm({
       };
     else if (mode === "archive")
       cmd = { kind: "archive", productId: product!.id };
+    else if (mode === "validity")
+      cmd = {
+        kind: "validity",
+        client: str("client"),
+        ...(str("phone") ? { phone: str("phone") } : {}),
+        item: str("item"),
+        quantity: num("quantity"),
+        startDate: str("startDate"),
+      };
+    else if (mode === "renew")
+      cmd = {
+        kind: "validity_renew",
+        validityId: validity!.id,
+        date: str("date"),
+      };
+    else if (mode === "dismiss")
+      cmd = { kind: "validity_dismiss", validityId: validity!.id };
     else {
+      // Só vendas agendam validade; na compra estes campos nem existem.
+      const contact =
+        tracking
+          ? {
+              ...(str("phone") ? { phone: str("phone") } : {}),
+              track: f.get("track") === "on",
+            }
+          : {};
       const items = lines.map((l) => ({
         productId: l.productId,
         quantity: l.quantity,
@@ -133,6 +205,7 @@ export default function OperationForm({
               ...items[0],
               date: str("date"),
               party: str("party"),
+              ...contact,
             }
           : {
               kind: "batch",
@@ -140,6 +213,7 @@ export default function OperationForm({
               items,
               date: str("date"),
               party: str("party"),
+              ...contact,
             };
     }
     const payload = JSON.stringify(cmd);
@@ -289,6 +363,115 @@ export default function OperationForm({
               ? O histórico de vendas será preservado. O produto deixará de
               aparecer no estoque ativo.
             </p>
+          ) : mode === "validity" ? (
+            <>
+              <label>
+                Cliente
+                <input
+                  name="client"
+                  required
+                  maxLength={120}
+                  autoFocus
+                  placeholder="Nome do cliente"
+                />
+              </label>
+              <div className="form-grid">
+                <label>
+                  WhatsApp <span className="optional">(opcional)</span>
+                  {phoneField}
+                </label>
+                <label>
+                  Quantidade
+                  <input
+                    name="quantity"
+                    type="number"
+                    defaultValue={1}
+                    min="1"
+                    max="100000"
+                    step="1"
+                    required
+                  />
+                </label>
+              </div>
+              <label>
+                Extintor
+                <input
+                  name="item"
+                  list="validity-items"
+                  required
+                  maxLength={120}
+                  placeholder="Ex.: Extintor Pó ABC · 4 kg"
+                />
+                <datalist id="validity-items">
+                  {products.map((p) => (
+                    <option key={p.id} value={`${p.name} · ${p.capacity}`} />
+                  ))}
+                </datalist>
+              </label>
+              <label>
+                Data da venda ou da recarga
+                <input
+                  name="startDate"
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  min="2000-01-01"
+                  max={today()}
+                  required
+                />
+              </label>
+              <div className="form-total">
+                <span>Vencimento em {VALIDITY_MONTHS} meses</span>
+                <strong>{dueFrom(date)}</strong>
+              </div>
+              <div className="hint">
+                <Info size={16} />
+                <span>
+                  Para recargas e extintores vendidos fora do sistema. Vendas
+                  registradas aqui já agendam a validade sozinhas.
+                </span>
+              </div>
+            </>
+          ) : mode === "renew" && validity ? (
+            <>
+              <p className="lead">
+                Recarga dos extintores de <strong>{validity.client}</strong> —{" "}
+                {validity.quantity}× {validity.item}. O lembrete atual é
+                encerrado e um novo ciclo de {VALIDITY_MONTHS} meses começa na
+                data da recarga.
+              </p>
+              <label>
+                Data da recarga
+                <input
+                  name="date"
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  min={validity.startDate}
+                  max={today()}
+                  required
+                  autoFocus
+                />
+              </label>
+              <div className="form-total">
+                <span>Próximo vencimento</span>
+                <strong>{dueFrom(date)}</strong>
+              </div>
+              <div className="hint">
+                <Info size={16} />
+                <span>
+                  Se também lançar a recarga como venda, desmarque “Agendar
+                  lembrete” na venda para o aviso não sair em dobro.
+                </span>
+              </div>
+            </>
+          ) : mode === "dismiss" && validity ? (
+            <p className="lead">
+              Dispensar o lembrete de <strong>{validity.client}</strong> (
+              {validity.quantity}× {validity.item}, vencimento{" "}
+              {display(validity.dueDate)})? Ele sai do calendário e dos avisos.
+              Use quando o cliente não vai renovar com você.
+            </p>
           ) : mode === "expense" ? (
             <>
               <label>
@@ -427,13 +610,14 @@ export default function OperationForm({
                 <Plus size={15} />
                 Adicionar novo item
               </button>
-              <div className="form-grid">
+              <div className={`form-grid ${tracking ? "three" : ""}`}>
                 <label>
                   Data
                   <input
                     name="date"
                     type="date"
-                    defaultValue={today()}
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
                     min="2000-01-01"
                     max={today()}
                     required
@@ -450,7 +634,23 @@ export default function OperationForm({
                     maxLength={120}
                   />
                 </label>
+                {tracking && (
+                  <label>
+                    WhatsApp <span className="optional">(opcional)</span>
+                    {phoneField}
+                  </label>
+                )}
               </div>
+              {tracking && (
+                <label className="check">
+                  <input type="checkbox" name="track" defaultChecked />
+                  <span>
+                    <strong>Agendar lembrete de validade</strong>
+                    Os extintores desta venda vencem em {dueFrom(date)}. O
+                    cliente aparece no calendário {ALERT_DAYS} dias antes.
+                  </span>
+                </label>
+              )}
               <div className="form-total">
                 <span>
                   Total da {mode === "sale" ? "venda" : "compra"} ·{" "}
@@ -491,7 +691,11 @@ export default function OperationForm({
                 ? "Salvando…"
                 : mode === "archive"
                   ? "Arquivar produto"
-                  : "Salvar registro"}
+                  : mode === "renew"
+                    ? "Registrar renovação"
+                    : mode === "dismiss"
+                      ? "Dispensar lembrete"
+                      : "Salvar registro"}
               {!busy && <ArrowRight size={16} />}
             </button>
           </div>

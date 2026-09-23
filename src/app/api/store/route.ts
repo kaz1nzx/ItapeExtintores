@@ -54,12 +54,16 @@ export async function POST(request: Request) {
     expected_version: parsed.data.version,
   });
   if (error) {
+    // "Operação desconhecida." vem de uma função de banco anterior ao
+    // database/upgrade.sql: o app já envia operações que ela não conhece.
     const message =
       error.code === "23505"
         ? "Este código de produto já está cadastrado."
-        : error.code === "P0001"
-          ? error.message
-          : "Não foi possível salvar. Atualize os dados e tente novamente.";
+        : error.message === "Operação desconhecida."
+          ? "O banco de dados ainda não tem esta função. Aplique database/upgrade.sql no SQL Editor do Supabase e tente novamente."
+          : error.code === "P0001"
+            ? error.message
+            : "Não foi possível salvar. Atualize os dados e tente novamente.";
     return json(
       { error: message },
       error.message.includes("dados mudaram") ? 409 : 400,
