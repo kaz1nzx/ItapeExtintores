@@ -1,5 +1,5 @@
-# Itapê Extintores
 
+<<<<<<< HEAD
 Sistema de estoque e financeiro construído em Next.js App Router, React, TypeScript e Supabase. O ZIP original serviu de referência funcional; a estrutura Vite foi substituída por Next.js e a interface foi redesenhada.
 
 ## Abrir o projeto
@@ -127,3 +127,5 @@ Para uma loja pequena, os registros da conta são carregados de uma só vez, per
 - [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Funções transacionais no banco](https://supabase.com/docs/guides/database/functions)
 - [Segurança de dados no Next.js](https://nextjs.org/docs/app/guides/data-security)
+=======
+>>>>>>> 52a08585c2fbebd82300a71efc4a08f83c945f3e
