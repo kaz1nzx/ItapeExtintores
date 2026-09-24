@@ -43,6 +43,8 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 7. Em **Relatórios**, selecione semana ou mês; baixe CSV ou use **Imprimir / PDF**. Para gerar PDF, escolha “Salvar como PDF” na janela de impressão.
 8. Em **Configurações**, exporte uma cópia JSON dos registros quando necessário.
 
+Em **Validades**, clique em qualquer dia do calendário para salvar um lembrete, como “Orçamento para cliente X”, com observações opcionais. O calendário funciona mesmo sem validades cadastradas. Quando faltarem **menos de 30 dias**, aparecem uma notificação no site, um contador ao lado de Validades e um alerta junto do lembrete. Lembretes atrasados continuam avisando até clicar em **Concluir**. Na conta real, os lembretes ficam salvos no Supabase; na demonstração, são descartados ao recarregar.
+
 ## O que foi implementado
 
 - Painel com receita, custos/despesas, resultado e estoque atual; gráfico diário.

@@ -9,6 +9,28 @@
 --   1. Compras e vendas com vários produtos na mesma remessa (comando 'batch').
 --   2. Calendário de validades: cada venda agenda o vencimento de 12 meses dos
 --      extintores do cliente, com registro manual, renovação e dispensa.
+--   3. Lembretes livres por data, com observações e conclusão.
+
+create table if not exists public.itape_reminders (
+  id uuid primary key,
+  owner_id uuid not null references auth.users(id),
+  title text not null check (length(trim(title)) between 1 and 120),
+  date date not null check (date between '2000-01-01'::date and '2100-12-31'::date),
+  notes text not null default '' check (length(notes) <= 1000),
+  status text not null default 'pending' check (status in ('pending', 'done')),
+  created_at timestamptz not null default now()
+);
+create index if not exists itape_reminders_owner_date on public.itape_reminders(owner_id, date);
+alter table public.itape_reminders enable row level security;
+do $$
+begin
+  if not exists (select 1 from pg_catalog.pg_policies where schemaname = 'public' and tablename = 'itape_reminders' and policyname = 'owner_read') then
+    create policy owner_read on public.itape_reminders for select to authenticated using (owner_id = (select auth.uid()));
+  end if;
+end;
+$$;
+revoke all on public.itape_reminders from anon, authenticated;
+grant select on public.itape_reminders to authenticated;
 
 create table if not exists public.itape_validities (
   id uuid primary key,
@@ -43,7 +65,8 @@ language sql stable security invoker set search_path = '' as $$
     'products', coalesce((select jsonb_agg(to_jsonb(p) - 'owner_id' order by p.sku) from public.itape_products p where owner_id = (select auth.uid())), '[]'::jsonb),
     'movements', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'productId', m.product_id, 'productName', m.product_name, 'kind', m.kind, 'quantity', m.quantity, 'unitPrice', m.unit_price, 'unitCost', m.unit_cost, 'tax', m.tax, 'date', m.date, 'party', m.party, 'actor', m.actor, 'createdAt', m.created_at) order by m.date, m.created_at) from public.itape_movements m where owner_id = (select auth.uid())), '[]'::jsonb),
     'expenses', coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'description', e.description, 'amount', e.amount, 'date', e.date, 'actor', e.actor, 'createdAt', e.created_at) order by e.date, e.created_at) from public.itape_expenses e where owner_id = (select auth.uid())), '[]'::jsonb),
-    'validities', coalesce((select jsonb_agg(jsonb_build_object('id', v.id, 'client', v.client, 'phone', v.phone, 'item', v.item, 'quantity', v.quantity, 'startDate', v.start_date, 'dueDate', v.due_date, 'status', v.status, 'movementId', v.movement_id, 'resolvedAt', v.resolved_at, 'createdAt', v.created_at) order by v.due_date, v.created_at) from public.itape_validities v where owner_id = (select auth.uid())), '[]'::jsonb)
+    'validities', coalesce((select jsonb_agg(jsonb_build_object('id', v.id, 'client', v.client, 'phone', v.phone, 'item', v.item, 'quantity', v.quantity, 'startDate', v.start_date, 'dueDate', v.due_date, 'status', v.status, 'movementId', v.movement_id, 'resolvedAt', v.resolved_at, 'createdAt', v.created_at) order by v.due_date, v.created_at) from public.itape_validities v where owner_id = (select auth.uid())), '[]'::jsonb),
+    'reminders', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'title', r.title, 'date', r.date, 'notes', r.notes, 'status', r.status, 'createdAt', r.created_at) order by r.date, r.created_at) from public.itape_reminders r where owner_id = (select auth.uid())), '[]'::jsonb)
   );
 $$;
 
@@ -134,6 +157,15 @@ begin
         values(pg_catalog.gen_random_uuid(), uid, trim(command->>'party'), trim(coalesce(command->>'phone', '')), p.name || ' · ' || p.capacity, q, movement_date, (movement_date + interval '12 months')::date, mid);
       end if;
     end loop;
+
+  elsif k = 'reminder' then
+    movement_date := (command->>'date')::date;
+    if movement_date is null or movement_date < '2000-01-01'::date or movement_date > '2100-12-31'::date then raise exception 'Data inválida.'; end if;
+    insert into public.itape_reminders(id, owner_id, title, date, notes)
+    values(request_id, uid, trim(command->>'title'), movement_date, trim(coalesce(command->>'notes', '')));
+  elsif k = 'reminder_complete' then
+    update public.itape_reminders set status = 'done' where id = (command->>'reminderId')::uuid and owner_id = uid and status = 'pending';
+    if not found then raise exception 'Lembrete não encontrado ou já concluído.'; end if;
 
   -- Validade registrada à mão (recarga ou extintor vendido fora do sistema).
   elsif k = 'validity' then

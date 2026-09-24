@@ -3,6 +3,7 @@ import { useState, type CSSProperties } from "react";
 import {
   ArrowUpRight,
   CalendarCheck,
+  Bell,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -20,9 +21,13 @@ import {
   urgency,
   type Urgency,
   type Validity,
+  type Reminder,
+  type Command,
+  reminderNeedsAttention,
 } from "@/lib/domain";
 import { CountUp } from "./motion";
 import { Empty } from "./primitives";
+import RemindersPanel from "./reminders";
 
 const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -75,6 +80,10 @@ export default function ValidityPage({
   onCreate,
   onRenew,
   onDismiss,
+  reminders,
+  remindersReady,
+  onSaveReminder,
+  now,
 }: {
   validities: Validity[];
   demo: boolean;
@@ -82,8 +91,11 @@ export default function ValidityPage({
   onCreate: () => void;
   onRenew: (v: Validity) => void;
   onDismiss: (v: Validity) => void;
+  reminders: Reminder[];
+  remindersReady: boolean;
+  onSaveReminder: (command: Command, requestId: string) => Promise<void>;
+  now: string;
 }) {
-  const now = today();
   const [month, setMonth] = useState(now.slice(0, 7));
   const [day, setDay] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("attention");
@@ -110,18 +122,6 @@ export default function ValidityPage({
     ["soon", `Vencem em até ${ALERT_DAYS} dias`, soon, "extintores · hora de avisar"],
     ["upcoming", "Em 31 a 90 dias", upcoming, "extintores no radar"],
   ];
-
-  if (!validities.length)
-    return (
-      <section className="panel">
-        <Empty
-          title="Nenhuma validade agendada ainda"
-          description={`Cada venda registrada agenda sozinha a validade de ${VALIDITY_MONTHS} meses para o cliente. Recargas feitas fora do sistema podem ser registradas à mão.`}
-        >
-          <button onClick={onCreate}>Registrar validade</button>
-        </Empty>
-      </section>
-    );
 
   return (
     <>
@@ -158,7 +158,10 @@ export default function ValidityPage({
           now={now}
           selected={day}
           onSelect={setDay}
+          reminders={reminders}
         />
+        <div className="agenda-column">
+        <RemindersPanel reminders={reminders} day={day} now={now} busy={busy} ready={remindersReady} onSave={onSaveReminder} onSelect={(date) => { setDay(date); setMonth(date.slice(0, 7)); }} />
         <section className="panel agenda-panel">
           <div className="panel-heading">
             <div>
@@ -226,7 +229,9 @@ export default function ValidityPage({
               }
             />
           )}
+          {!validities.length && <div className="reminder-help"><button onClick={onCreate}>Registrar validade</button></div>}
         </section>
+        </div>
       </div>
       <div className="info-line">
         <ShieldCheck size={16} />
@@ -244,6 +249,7 @@ function MonthCalendar({
   now,
   selected,
   onSelect,
+  reminders,
 }: {
   month: string;
   setMonth: (m: string) => void;
@@ -251,6 +257,7 @@ function MonthCalendar({
   now: string;
   selected: string | null;
   onSelect: (date: string | null) => void;
+  reminders: Reminder[];
 }) {
   const [y, m] = month.split("-").map(Number);
   const lead = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
@@ -269,6 +276,11 @@ function MonthCalendar({
     if (v.dueDate.startsWith(month))
       byDay.set(v.dueDate, [...(byDay.get(v.dueDate) ?? []), v]);
   const inMonth = [...byDay.values()].flat();
+  const remindersByDay = new Map<string, Reminder[]>();
+  for (const reminder of reminders) {
+    if (reminder.status === "pending" && reminder.date.startsWith(month))
+      remindersByDay.set(reminder.date, [...(remindersByDay.get(reminder.date) ?? []), reminder]);
+  }
   const cells: (number | null)[] = [
     ...Array<null>(lead).fill(null),
     ...Array.from({ length: total }, (_, i) => i + 1),
@@ -281,7 +293,7 @@ function MonthCalendar({
           <h2 className="cal-title">{label}</h2>
           <p>
             {inMonth.length} {inMonth.length === 1 ? "vencimento" : "vencimentos"} ·{" "}
-            {units(inMonth)} extintores
+            {units(inMonth)} extintores · {[...remindersByDay.values()].flat().length} lembretes
           </p>
         </div>
         <div className="cal-nav">
@@ -321,25 +333,29 @@ function MonthCalendar({
           if (d === null) return <span key={`vazio-${i}`} className="cal-empty" />;
           const date = `${month}-${String(d).padStart(2, "0")}`;
           const items = byDay.get(date) ?? [];
+          const dayReminders = remindersByDay.get(date) ?? [];
+          const reminderAlert = dayReminders.some((r) => reminderNeedsAttention(r, now));
           const worst = items
             .map((v) => urgency(v.dueDate, now))
             .sort((a, b) => RANK[a] - RANK[b])[0];
           return (
             <button
               key={date}
-              className={`cal-day ${worst ?? ""} ${date === now ? "today" : ""} ${date === selected ? "selected" : ""}`}
-              onClick={() => onSelect(date === selected ? null : date)}
+              className={`cal-day ${worst ?? (reminderAlert ? (date < now ? "overdue" : "soon") : "")} ${date === now ? "today" : ""} ${date === selected ? "selected" : ""}`}
+              onClick={() => onSelect(date)}
               aria-pressed={date === selected}
-              aria-label={`${d} de ${label}${items.length ? `: ${items.length} ${items.length === 1 ? "vencimento" : "vencimentos"}` : ""}`}
+              aria-label={`${d} de ${label}${items.length ? `: ${items.length} ${items.length === 1 ? "vencimento" : "vencimentos"}` : ""}${dayReminders.length ? `, ${dayReminders.length} ${dayReminders.length === 1 ? "lembrete" : "lembretes"}` : ""}. Adicionar lembrete`}
               style={{ "--i": i } as CSSProperties}
             >
               <span className="cal-num">{d}</span>
               {items.length > 0 && <span className="cal-mark">{items.length}</span>}
+              {dayReminders.length > 0 && <Bell size={12} className="cal-reminder" aria-hidden="true" />}
             </button>
           );
         })}
       </div>
       <div className="cal-legend" aria-hidden="true">
+        <span><Bell size={12} /> Lembrete</span>
         <span>
           <i className="overdue" /> Vencida
         </span>

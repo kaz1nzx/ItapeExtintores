@@ -2564,6 +2564,38 @@ tfoot td {
   align-items: start;
 }
 
+.agenda-column { display: grid; gap: 22px; min-width: 0; }
+.reminders-panel h2 { display: flex; align-items: center; gap: 8px; }
+.reminder-form { display: grid; gap: 8px; padding: 20px; border-bottom: 1px solid var(--line); }
+.reminder-form label { font-size: 13px; font-weight: 600; }
+.reminder-form input, .reminder-form textarea { width: 100%; min-width: 0; padding: 11px 12px; border: 1px solid var(--line); background: var(--paper, #fff); border-radius: 6px; font: inherit; color: inherit; }
+.reminder-form textarea { resize: vertical; }
+.reminder-form button { justify-self: start; margin-top: 4px; }
+.reminder-help { margin: 0; padding: 16px 20px; font-size: 13px; line-height: 1.6; color: var(--steel); }
+.reminder-list { margin: 0; padding: 0; list-style: none; }
+.reminder-list > li { display: flex; align-items: center; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.reminder-detail { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.reminder-detail > strong { display: block; font-size: 14px; }
+.reminder-detail > p { white-space: pre-wrap; margin: 6px 0; font-size: 13px; color: var(--steel); }
+.reminder-detail > button { margin: 8px 10px 0 0; }
+.reminder-alert, .reminder-date { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.reminder-alert { color: #9b4312; background: #fff0db; padding: 4px 7px; border-radius: 4px; font-weight: 600; }
+.reminder-date { color: var(--steel); }
+.reminder-error { color: #b42318; padding: 0 20px; font-size: 13px; }
+.reminder-form .reminder-error { padding: 0; }
+.reminder-notification { display: flex; align-items: center; gap: 14px; padding: 16px 20px; margin-bottom: 22px; background: #fff4e5; border: 1px solid #efd3a3; border-radius: 8px; color: #794015; }
+.reminder-notification > div { flex: 1; }
+.reminder-notification strong { font-size: 14px; }
+.reminder-notification p { margin: 5px 0 0; font-size: 13px; }
+.reminder-notification > svg { flex-shrink: 0; }
+.cal-reminder { position: absolute; left: 5px; bottom: 5px; }
+@media (max-width: 640px) {
+  .reminder-notification { display: grid; grid-template-columns: 20px minmax(0, 1fr); }
+  .reminder-notification > button { grid-column: 2; justify-self: start; }
+  .reminder-list > li { flex-wrap: wrap; }
+  .reminder-detail { flex-basis: 100%; }
+}
+
 /* ---- calendário */
 .cal-title {
   text-transform: uppercase;

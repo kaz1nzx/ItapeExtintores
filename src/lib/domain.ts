@@ -51,12 +51,21 @@ export type Validity = {
   resolvedAt: string | null;
   createdAt: string;
 };
+export type Reminder = {
+  id: string;
+  title: string;
+  notes: string;
+  date: string;
+  status: "pending" | "done";
+  createdAt: string;
+};
 export type Store = {
   version: number;
   products: Product[];
   movements: Movement[];
   expenses: Expense[];
   validities: Validity[];
+  reminders: Reminder[];
 };
 export type User = { id: string; name: string; role: "admin" | "operator" };
 export const emptyStore = (): Store => ({
@@ -65,11 +74,13 @@ export const emptyStore = (): Store => ({
   movements: [],
   expenses: [],
   validities: [],
+  reminders: [],
 });
 // Um banco ainda sem a atualização de validades não devolve a lista.
 export const withDefaults = (store: Store): Store => ({
   ...store,
   validities: store.validities ?? [],
+  reminders: store.reminders ?? [],
 });
 export const money = (cents: number) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -91,6 +102,10 @@ export const VALIDITY_MONTHS = 12;
 // A partir de quantos dias antes do vencimento o cliente entra na lista de
 // contato.
 export const ALERT_DAYS = 30;
+// Lembretes entram no aviso com menos de 30 dias e permanecem até a conclusão.
+export function reminderNeedsAttention(reminder: Reminder, now = today()) {
+  return reminder.status === "pending" && daysBetween(now, reminder.date) < ALERT_DAYS;
+}
 export function addMonths(date: string, months: number) {
   const [y, m, d] = date.split("-").map(Number);
   const index = y * 12 + (m - 1) + months;
@@ -138,6 +153,17 @@ const phone = z
   .max(30)
   .regex(/^[0-9+(). -]*$/, "Informe um telefone válido.");
 export const commandSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("reminder"),
+    title: text,
+    notes: z.string().trim().max(1000),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => {
+      const d = new Date(`${v}T12:00:00Z`);
+      return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v &&
+        v >= "2000-01-01" && v <= "2100-12-31";
+    }, "Informe uma data válida para o lembrete."),
+  }),
+  z.object({ kind: z.literal("reminder_complete"), reminderId: text }),
   z.object({
     kind: z.literal("product"),
     id: z.string().optional(),
@@ -211,6 +237,7 @@ export function applyCommand(
     throw new Error("Somente administradores podem executar esta ação.");
   const next = structuredClone(store);
   next.validities ??= [];
+  next.reminders ??= [];
   if (cmd.kind === "product") {
     if (
       next.products.some(
@@ -234,6 +261,12 @@ export function applyCommand(
     if (p.stock !== 0)
       throw new Error("Só é possível arquivar produtos sem estoque.");
     p.active = false;
+  } else if (cmd.kind === "reminder")
+    next.reminders.push({ id, title: cmd.title, notes: cmd.notes, date: cmd.date, status: "pending", createdAt });
+  else if (cmd.kind === "reminder_complete") {
+    const reminder = next.reminders.find((r) => r.id === cmd.reminderId && r.status === "pending");
+    if (!reminder) throw new Error("Lembrete não encontrado ou já concluído.");
+    reminder.status = "done";
   } else if (cmd.kind === "expense")
     next.expenses.push({ ...cmd, id, actor: actor.name, createdAt });
   else if (cmd.kind === "batch")
@@ -561,6 +594,7 @@ export function demoStore(): Store {
     version: 0,
     products,
     validities: [...history, ...fromSales],
+    reminders: [],
     movements: [...movements, ...restocks].sort((a, b) =>
       a.date.localeCompare(b.date),
     ),

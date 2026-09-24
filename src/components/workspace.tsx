@@ -48,6 +48,7 @@ import {
   daysBefore,
   daysBetween,
   withDefaults,
+  reminderNeedsAttention,
 } from "@/lib/domain";
 import OperationForm, { type FormMode } from "./operation-form";
 import { Empty, Extinguisher, download } from "./primitives";
@@ -97,11 +98,21 @@ export default function Workspace({
   // caso o calendário fica guardado e a venda não promete um lembrete que o
   // banco não teria como gravar.
   const [ready, setReady] = useState(() => Array.isArray(initial.validities));
+  const [remindersReady, setRemindersReady] = useState(() => demo || Array.isArray(initial.reminders));
+  const [calendarToday, setCalendarToday] = useState(today);
+  useEffect(() => {
+    const update = () => setCalendarToday(today());
+    const timer = window.setInterval(update, 60_000);
+    window.addEventListener("focus", update);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", update); };
+  }, []);
   function receive(data: Store) {
     setReady(Array.isArray(data.validities));
+    setRemindersReady(Array.isArray(data.reminders));
     setStore(withDefaults(data));
   }
   const [page, setPage] = useState<Page>("overview");
+  const [calendarView, setCalendarView] = useState(0);
   const [period, setPeriod] = useState<"week" | "month">("month");
   const [anchor, setAnchor] = useState(today());
   const [query, setQuery] = useState("");
@@ -148,8 +159,10 @@ export default function Workspace({
   const low = products.filter((p) => p.stock <= p.minimum);
   // Clientes a contatar: vencidos ou vencendo dentro da janela de aviso.
   const dueSoon = store.validities.filter(
-    (v) => v.status === "pending" && daysBetween(today(), v.dueDate) <= ALERT_DAYS,
+    (v) => v.status === "pending" && daysBetween(calendarToday, v.dueDate) <= ALERT_DAYS,
   );
+  const reminderAlerts = store.reminders.filter((r) => reminderNeedsAttention(r, calendarToday));
+  const calendarAlerts = dueSoon.length + reminderAlerts.length;
   const stockUnits = products.reduce((a, p) => a + p.stock, 0);
   const stockValue = products.reduce((a, p) => a + p.stock * p.cost, 0);
   const filteredProducts = products.filter(
@@ -172,6 +185,10 @@ export default function Workspace({
     setPage(next);
     setTablePage(0);
     setMobileMenu(false);
+  }
+  function openCalendarAlerts() {
+    setCalendarView((value) => value + 1);
+    go("validity");
   }
   function open(mode: FormMode, product?: Product, validity?: Validity) {
     if (busy.current) return;
@@ -440,12 +457,12 @@ export default function Workspace({
                 {n.id === "stock" && (
                   <span className="nav-count">{products.length}</span>
                 )}
-                {n.id === "validity" && dueSoon.length > 0 && (
+                {n.id === "validity" && calendarAlerts > 0 && (
                   <span
                     className="nav-count alert"
-                    aria-label={`${dueSoon.length} para contatar`}
+                    aria-label={`${calendarAlerts} alertas de validades e lembretes`}
                   >
-                    {dueSoon.length}
+                    {calendarAlerts}
                   </span>
                 )}
               </button>
@@ -530,12 +547,12 @@ export default function Workspace({
             </button>
             <button
               className="icon-button notification"
-              aria-label={`${dueSoon.length} validades de clientes a vencer`}
-              title="Validades a vencer"
-              onClick={() => go("validity")}
+              aria-label={`${calendarAlerts} alertas de validades e lembretes`}
+              title="Validades e lembretes"
+              onClick={openCalendarAlerts}
             >
               <CalendarClock size={19} />
-              {dueSoon.length > 0 && <i />}
+              {calendarAlerts > 0 && <i />}
             </button>
             <span className="user-avatar">AD</span>
           </div>
@@ -543,6 +560,13 @@ export default function Workspace({
         {/* key={page} remonta o bloco: o título recorta e os números recontam
             a cada troca de seção. */}
         <main id="content" className="content page-swap" key={page}>
+          {reminderAlerts.length > 0 && (
+            <div className="reminder-notification" role="status">
+              <Bell size={20} aria-hidden="true" />
+              <div><strong>{reminderAlerts.length === 1 ? "Você tem 1 lembrete que precisa de atenção" : `Você tem ${reminderAlerts.length} lembretes que precisam de atenção`}</strong><p>Agendados para menos de 30 dias ou com a data já passada.</p></div>
+              <button onClick={openCalendarAlerts}>Ver lembretes <ArrowRight size={16} /></button>
+            </div>
+          )}
           {demo && (
             <div className="demo-banner">
               <span>
@@ -837,7 +861,12 @@ export default function Workspace({
           {page === "validity" && !ready && <ValidityUpgradeNotice />}
           {page === "validity" && ready && (
             <ValidityPage
+              key={calendarView}
               validities={store.validities}
+              reminders={store.reminders}
+              remindersReady={remindersReady}
+              onSaveReminder={save}
+              now={calendarToday}
               demo={demo}
               busy={saving}
               onCreate={() => open("validity")}
