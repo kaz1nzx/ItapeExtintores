@@ -32,7 +32,7 @@ export async function createQuotationPdf(q: Quotation, fonts?: Fonts, demo = fal
   doc.addFileToVFS("NotoSans-Bold.ttf", embedded.bold);
   doc.addFont("NotoSans-Regular.ttf", "NotoSans", "normal");
   doc.addFont("NotoSans-Bold.ttf", "NotoSans", "bold");
-  doc.setProperties({ title: `Orçamento ${quotationNumber(q)}`, subject: `Venda para ${q.client}`, author: q.company.name });
+  doc.setProperties({ title: `Orçamento ${quotationNumber(q)}`, subject: `Venda para ${q.client}`, author: q.company.name || "ExtinPro" });
   const left = 16, right = 194, bottom = 271;
   let y = 20;
   const font = (size: number, bold = false) => {
@@ -44,7 +44,7 @@ export async function createQuotationPdf(q: Quotation, fonts?: Fonts, demo = fal
     doc.addPage();
     y = 20;
     font(10, true);
-    doc.text(`ITAPÊ EXTINTORES · Orçamento ${quotationNumber(q)}`, left, y);
+    doc.text(`ExtinPro · Orçamento ${quotationNumber(q)}`, left, y);
     y += 12;
   };
   const ensure = (height: number) => { if (y + height > bottom) newPage(); };
@@ -61,15 +61,19 @@ export async function createQuotationPdf(q: Quotation, fonts?: Fonts, demo = fal
   doc.setFillColor(221, 53, 25);
   doc.rect(left, y - 6, 3, 16, "F");
   font(20, true);
-  doc.text("ITAPÊ EXTINTORES", left + 8, y + 2);
+  doc.text("ExtinPro", left + 8, y + 2);
   font(9);
   doc.text("ORÇAMENTO / VENDA", right, y, { align: "right" });
   doc.text(quotationNumber(q), right, y + 6, { align: "right" });
   y += 20;
-  paragraph(`${q.company.name} ${q.company.suffix}`, 10, true);
-  paragraph(`CNPJ: ${q.company.cnpj}`, 9);
-  paragraph(`${q.company.address} · ${q.company.city}`, 9);
-  paragraph(`${q.company.email} · Contato: ${q.company.contact}`, 9);
+  const companyName = [q.company.name, q.company.suffix].filter(Boolean).join(" ");
+  const companyAddress = [q.company.address, q.company.city].filter(Boolean).join(" · ");
+  const companyContact = [q.company.email, q.company.contact && `Contato: ${q.company.contact}`].filter(Boolean).join(" · ");
+  if (companyName) paragraph(companyName, 10, true);
+  if (q.company.cnpj) paragraph(`CNPJ: ${q.company.cnpj}`, 9);
+  if (companyAddress) paragraph(companyAddress, 9);
+  if (companyContact) paragraph(companyContact, 9);
+  if (q.company.phone) paragraph(`Telefone: ${q.company.phone}`, 9);
   y += 6;
   paragraph(`Data da venda: ${display(q.date)}`, 10, true);
   paragraph(`Cliente: ${q.client}`);

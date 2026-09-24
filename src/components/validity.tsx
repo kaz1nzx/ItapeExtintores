@@ -53,7 +53,7 @@ function whatsappLink(v: Validity, demo: boolean) {
   const late = daysBetween(today(), v.dueDate) < 0;
   const what = v.quantity === 1 ? "do extintor" : `dos ${v.quantity} extintores`;
   const text =
-    `Olá, ${v.client}! Aqui é da Itapê Extintores. ` +
+    `Olá, ${v.client}! ` +
     `A validade ${what} (${v.item}) ${late ? "venceu" : "vence"} em ${display(v.dueDate)}. ` +
     (late ? "Vamos agendar a recarga?" : "Podemos agendar a recarga antes do vencimento?");
   let digits = demo ? "" : v.phone.replace(/\D/g, "");

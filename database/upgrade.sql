@@ -1,4 +1,4 @@
--- Itapê Extintores · atualização cumulativa do banco.
+-- ExtinPro · atualização cumulativa do banco.
 --
 -- Execute no SQL Editor do projeto Supabase já configurado (em um banco novo,
 -- rode antes o database/schema.sql). Pode ser executado mais de uma vez: cria
@@ -11,6 +11,10 @@
 --      extintores do cliente, com registro manual, renovação e dispensa.
 --   3. Lembretes livres por data, com observações e conclusão.
 --   4. Orçamentos numerados e preservados junto de cada venda.
+--   5. Cadastro da empresa por conta, preservado nos novos orçamentos.
+
+alter table public.itape_accounts add column if not exists company jsonb
+  check (company is null or jsonb_typeof(company) = 'object');
 
 create table if not exists public.itape_quotations (
   id uuid primary key,
@@ -91,6 +95,7 @@ create or replace function public.itape_state() returns jsonb
 language sql stable security invoker set search_path = '' as $$
   select jsonb_build_object(
     'version', coalesce((select version from public.itape_accounts where owner_id = (select auth.uid())), 0),
+    'company', (select company from public.itape_accounts where owner_id = (select auth.uid())),
     'products', coalesce((select jsonb_agg(to_jsonb(p) - 'owner_id' order by p.sku) from public.itape_products p where owner_id = (select auth.uid())), '[]'::jsonb),
     'movements', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'quotationId', m.quotation_id, 'productId', m.product_id, 'productName', m.product_name, 'kind', m.kind, 'quantity', m.quantity, 'unitPrice', m.unit_price, 'unitCost', m.unit_cost, 'tax', m.tax, 'date', m.date, 'party', m.party, 'actor', m.actor, 'createdAt', m.created_at) order by m.date, m.created_at) from public.itape_movements m where owner_id = (select auth.uid())), '[]'::jsonb),
     'quotations', coalesce((select jsonb_agg(jsonb_build_object('id', q.id, 'number', q.number, 'date', q.date, 'client', q.client, 'phone', q.phone, 'paymentTerms', q.payment_terms, 'notes', q.notes, 'company', q.company, 'items', q.items, 'createdAt', q.created_at) order by q.date, q.number) from public.itape_quotations q where owner_id = (select auth.uid())), '[]'::jsonb),
@@ -151,9 +156,26 @@ begin
     insert into public.itape_quotations(id, owner_id, number, year, date, client, phone, payment_terms, notes, company, items)
     values(request_id, uid, quotation_number, extract(year from movement_date)::integer, movement_date, trim(command->>'party'), trim(coalesce(command->>'phone', '')),
       trim(coalesce(command->'quotation'->>'paymentTerms', 'PIX, Transferência Bancária, Boleto 28 dias')), trim(coalesce(command->'quotation'->>'notes', '')),
-      jsonb_build_object('name', 'Itapê Extintores e projetos de prevenção a incêndio', 'suffix', 'Ltda', 'cnpj', '48.936.509/0001-77', 'address', 'Dino José da Silva', 'city', '18205761 - Itapetininga /SP', 'email', 'itapeextintores@gmail.com', 'contact', 'Maicon Pontes'), quotation_items);
+      coalesce((select company from public.itape_accounts where owner_id = uid), jsonb_build_object('name', '', 'suffix', '', 'cnpj', '', 'address', '', 'city', '', 'email', '', 'contact', '', 'phone', '')), quotation_items);
   end if;
-  if k = 'product' then
+  if k = 'company' then
+    if jsonb_typeof(command->'company') is distinct from 'object' then raise exception 'Dados da empresa inválidos.'; end if;
+    for item in select jsonb_build_object('field', field, 'limit', max_length)
+      from (values ('name',120),('suffix',40),('cnpj',30),('address',240),('city',120),('email',254),('contact',120),('phone',30)) as fields(field,max_length)
+    loop
+      if jsonb_typeof(command->'company'->(item->>'field')) is distinct from 'string'
+        or length(command->'company'->>(item->>'field')) > (item->>'limit')::integer
+      then raise exception 'Dados da empresa inválidos.'; end if;
+    end loop;
+    if length(trim(command->'company'->>'name')) = 0
+      or ((command->'company'->>'email') <> '' and (command->'company'->>'email') !~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$')
+      or (command->'company'->>'phone') !~ '^[0-9+() .-]*$'
+    then raise exception 'Confira o nome, o e-mail e o telefone da empresa.'; end if;
+    update public.itape_accounts set company = (
+      select jsonb_object_agg(field, trim(command->'company'->>field))
+      from unnest(array['name','suffix','cnpj','address','city','email','contact','phone']) as fields(field)
+    ) where owner_id = uid;
+  elsif k = 'product' then
     if command->>'id' is not null then
       pid := (command->>'id')::uuid;
       select * into p from public.itape_products where id = pid and owner_id = uid and active for update;

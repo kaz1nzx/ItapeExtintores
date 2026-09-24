@@ -1,6 +1,8 @@
 
 <<<<<<< HEAD
-Sistema de estoque e financeiro construído em Next.js App Router, React, TypeScript e Supabase. O ZIP original serviu de referência funcional; a estrutura Vite foi substituída por Next.js e a interface foi redesenhada.
+ExtinPro é um sistema de estoque e financeiro construído em Next.js App Router, React, TypeScript e Supabase. O ZIP original serviu de referência funcional; a estrutura Vite foi substituída por Next.js e a interface foi redesenhada.
+
+Orçamentos fica no fim do menu principal, após Relatórios. Cada conta possui uma empresa, cadastrada em **Configurações → Sua empresa**, com nome, complemento da razão social, CNPJ, endereço, cidade/UF/CEP, e-mail, responsável e telefone. O painel identifica a empresa conectada, e os novos orçamentos preservam uma cópia do cadastro na emissão. Editar o cadastro não modifica documentos antigos. Contas novas começam sem empresa predefinida.
 
 ## Abrir o projeto
 
@@ -28,8 +30,8 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 - As tabelas, funções, índices e políticas de acesso já foram criados nesse projeto.
 - `.env.local` contém a URL e a chave **publishable**, sem chave secreta ou `service_role`. A chave publishable é um identificador de projeto; o acesso depende da sessão e das regras no banco.
 - Esse arquivo está ignorado pelo Git. Em outra instalação, copie `.env.example` para `.env.local` e preencha a URL e a chave publishable do painel Supabase.
-- Crie ou use sua própria conta de e-mail/senha em **Authentication → Users** no Supabase e entre com ela na tela de login. Nenhuma senha padrão foi criada. Não foi necessário consultar as contas existentes.
-- Cada conta vê somente seus próprios produtos e registros. Para a operação de uma pessoa, use sempre a mesma conta. Não há compartilhamento entre contas nesta versão.
+- Para uma nova empresa, crie uma conta de e-mail/senha em **Authentication → Users** no Supabase, entre com ela no site e preencha **Configurações → Sua empresa**. Nenhuma senha padrão foi criada.
+- Cada conta vê somente sua própria empresa, produtos e registros. Não há compartilhamento entre logins nem várias empresas no mesmo login nesta versão. A conta `teste@gmail.com` foi vinculada à ItapeExtintores, com os dados disponíveis em seus orçamentos anteriores.
 - Não há cadastro público pela interface. Se não precisar de novos usuários, desative novos cadastros nas configurações de Auth do projeto.
 
 ## Como começar
@@ -38,7 +40,7 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 2. Em **Estoque → Novo produto**, informe código, tipo, capacidade, custo, preço de venda, estoque mínimo e alíquota.
 3. Em **Entrada de estoque**, registre as quantidades, o custo de compra e o fornecedor. O cadastro começa com estoque zero.
 4. Use **Nova venda** para registrar cliente, quantidade, preço e data. A baixa de estoque acontece na mesma transação da venda. Informe o WhatsApp do cliente e mantenha **Agendar lembrete de validade** marcado: os extintores vendidos entram no calendário com vencimento em 12 meses.
-   Preencha também as condições de pagamento e, se necessário, as observações. Ao clicar em **Salvar venda e gerar PDF**, o sistema baixa um orçamento numerado com os dados da empresa, cliente, data, todos os produtos, quantidades, valores unitários, subtotais e total. Para baixar novamente, use **Movimentações → PDF**. O orçamento preserva os dados da venda mesmo que o cadastro do produto seja alterado depois. Se o download falhar, tente novamente pelo botão **Baixar orçamento PDF**, sem registrar outra venda.
+   Preencha também as condições de pagamento e, se necessário, as observações. Ao clicar em **Salvar venda e gerar PDF**, o sistema baixa um orçamento numerado com os dados da empresa, cliente, data, todos os produtos, quantidades, valores unitários, subtotais e total e abre a aba **Orçamentos** no menu esquerdo. Nela ficam reunidos os orçamentos de todos os períodos, com busca por cliente ou número e botão **Baixar PDF**. O orçamento preserva os dados da venda mesmo que o cadastro do produto seja alterado depois. Se o download falhar, tente novamente pela aba Orçamentos, sem registrar outra venda.
 5. Em **Validades**, acompanhe quem precisa de contato: o cliente aparece 30 dias antes do vencimento, com **Avisar** (abre o WhatsApp com a mensagem pronta), **Renovar** (registra a recarga e abre o próximo ciclo de 12 meses) e dispensa. Recargas feitas fora do sistema entram por **Registrar validade**.
 6. Lance aluguel, transporte e outros gastos em **Financeiro → Nova despesa**. Não lance a compra de extintores novamente como despesa.
 7. Em **Relatórios**, selecione semana ou mês; baixe CSV ou use **Imprimir / PDF**. Para gerar PDF, escolha “Salvar como PDF” na janela de impressão.
@@ -53,7 +55,7 @@ Em **Validades**, clique em qualquer dia do calendário para salvar um lembrete,
 - Alertas por estoque mínimo e arquivamento de produtos sem saldo.
 - Compras com custo médio ponderado, vendas com baixa de estoque e histórico de movimentações.
 - Compras e vendas com vários produtos na mesma remessa, registradas em uma única transação.
-- Orçamento em PDF após salvar cada venda, com numeração por ano, condições de pagamento, observações e download pelo histórico. Fontes Noto Sans incorporadas preservam acentos e símbolos; licença em `public/fonts/OFL.txt`.
+- Aba Orçamentos com os PDFs das vendas, busca por cliente ou número, numeração por ano, condições de pagamento e observações. Fontes Noto Sans incorporadas preservam acentos e símbolos; licença em `public/fonts/OFL.txt`.
 - Calendário de validades: cada venda agenda o vencimento de 12 meses para o cliente; aviso 30 dias antes na Visão geral, no menu e na barra superior; mensagem pronta no WhatsApp; renovação que reinicia o ciclo.
 - Valores de custo, preço e alíquota preservados em cada venda.
 - Despesas operacionais, composição do resultado e saldo operacional estimado.

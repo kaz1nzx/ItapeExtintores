@@ -67,13 +67,13 @@ export default function Login() {
               </span>
             </Magnetic>
             <span>
-              itapê<span className="brand-sub">EXTINTORES</span>
+              ExtinPro<span className="brand-sub">GESTÃO</span>
             </span>
           </Link>
           <span className="story-code" aria-hidden="true">
-            CNAE 4789-0/99
+            GESTÃO DE EXTINTORES
             <br />
-            ITAPÊ · BRASIL
+            EXTINPRO · BRASIL
           </span>
         </div>
         <div className="story-main">

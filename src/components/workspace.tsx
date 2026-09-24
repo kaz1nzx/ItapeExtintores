@@ -8,6 +8,7 @@ import {
   ArrowLeftRight,
   Wallet,
   FileChartColumn,
+  FileText,
   Settings2,
   ChevronRight,
   ChevronLeft,
@@ -52,6 +53,7 @@ import {
   reminderNeedsAttention,
 } from "@/lib/domain";
 import OperationForm, { type FormMode } from "./operation-form";
+import CompanyForm from "./company-form";
 import { Empty, Extinguisher, download } from "./primitives";
 import { CountUp, Reveal } from "./motion";
 import Chart from "./chart";
@@ -67,6 +69,7 @@ const nav = [
   { id: "validity", label: "Validades", icon: CalendarClock },
   { id: "finance", label: "Financeiro", icon: Wallet },
   { id: "reports", label: "Relatórios", icon: FileChartColumn },
+  { id: "quotations", label: "Orçamentos", icon: FileText },
   { id: "settings", label: "Configurações", icon: Settings2 },
 ] as const;
 type Page = (typeof nav)[number]["id"];
@@ -74,6 +77,7 @@ const subtitles: Record<Page, string> = {
   overview: "Uma visão clara de tudo que movimenta o seu negócio.",
   stock: "Cada produto no lugar certo. Cada unidade sob controle.",
   movements: "Acompanhe as entradas e saídas da sua operação.",
+  quotations: "Todos os orçamentos das suas vendas, prontos para baixar em PDF.",
   validity: "Cada extintor vendido, com a data certa para voltar ao cliente.",
   finance: "Entenda seus custos e acompanhe seus resultados.",
   reports: "Os números que ajudam a decidir o próximo passo.",
@@ -117,6 +121,7 @@ export default function Workspace({
   const [period, setPeriod] = useState<"week" | "month">("month");
   const [anchor, setAnchor] = useState(today());
   const [query, setQuery] = useState("");
+  const [quotationQuery, setQuotationQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [movementKind, setMovementKind] = useState("all");
   const [tablePage, setTablePage] = useState(0);
@@ -167,7 +172,10 @@ export default function Workspace({
   );
   const reminderAlerts = store.reminders.filter((r) => reminderNeedsAttention(r, calendarToday));
   const calendarAlerts = dueSoon.length + reminderAlerts.length;
-  const quotationsById = new Map(store.quotations.map((q) => [q.id, q]));
+  const quotationNeedle = quotationQuery.trim().toLocaleLowerCase("pt-BR");
+  const quotations = store.quotations
+    .filter((q) => `${q.client} ${String(q.number).padStart(4, "0")}/${q.date.slice(0, 4)}`.toLocaleLowerCase("pt-BR").includes(quotationNeedle))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.number - a.number);
   const stockUnits = products.reduce((a, p) => a + p.stock, 0);
   const stockValue = products.reduce((a, p) => a + p.stock * p.cost, 0);
   const filteredProducts = products.filter(
@@ -189,6 +197,7 @@ export default function Workspace({
   function go(next: Page) {
     setPage(next);
     setTablePage(0);
+    if (next === "quotations") setQuotationQuery("");
     setMobileMenu(false);
   }
   function openCalendarAlerts() {
@@ -276,6 +285,7 @@ export default function Workspace({
       const quotation = confirmed.quotations.find((q) => q.id === requestId);
       if (quotation) {
         setLastQuotation(quotation);
+        go("quotations");
         await downloadQuotation(quotation);
       } else {
         setNotice({ error: true, message: "Venda salva. O banco precisa da atualização database/upgrade.sql para disponibilizar o orçamento em PDF." });
@@ -460,17 +470,17 @@ export default function Workspace({
             <Flame strokeWidth={2} />
           </span>
           <span>
-            itapê<span className="brand-sub">EXTINTORES</span>
+            ExtinPro<span className="brand-sub">GESTÃO</span>
           </span>
         </Link>
-        <div className="workspace-switch">
-          <span className="store-avatar">IE</span>
+        <button className="workspace-switch" onClick={() => go("settings")} aria-label="Configurar sua empresa">
+          <span className="store-avatar">{store.company?.name.slice(0, 2).toUpperCase() || "EP"}</span>
           <span>
-            <strong>Itapê Extintores</strong>
-            <small>Central de gestão</small>
+            <strong>{store.company?.name || "Sua empresa"}</strong>
+            <small>{store.company?.cnpj || "Configurar empresa"}</small>
           </span>
           <ChevronRight size={15} />
-        </div>
+        </button>
         <span className="nav-label">PRINCIPAL</span>
         <nav aria-label="Navegação principal">
           {nav
@@ -486,6 +496,9 @@ export default function Workspace({
                 {n.label}
                 {n.id === "stock" && (
                   <span className="nav-count">{products.length}</span>
+                )}
+                {n.id === "quotations" && (
+                  <span className="nav-count">{store.quotations.length}</span>
                 )}
                 {n.id === "validity" && calendarAlerts > 0 && (
                   <span
@@ -592,7 +605,8 @@ export default function Workspace({
         <main id="content" className="content page-swap" key={page}>
           {lastQuotation && (
             <section className="sale-pdf-notice" aria-label="Orçamento da venda registrada">
-              <div><strong>Venda registrada · {lastQuotation.client}</strong><p>Orçamento {String(lastQuotation.number).padStart(4, "0")}/{lastQuotation.date.slice(0, 4)} disponível. Você também pode baixá-lo em Movimentações.</p></div>
+              <div><strong>Venda registrada · {lastQuotation.client}</strong><p>Orçamento {String(lastQuotation.number).padStart(4, "0")}/{lastQuotation.date.slice(0, 4)} salvo na aba Orçamentos.</p></div>
+              {page !== "quotations" && <button onClick={() => go("quotations")}><FileText size={16} /> Ver orçamentos</button>}
               <button disabled={pdfBusy} onClick={() => downloadQuotation(lastQuotation)}><Download size={16} /> {pdfBusy ? "Gerando PDF…" : "Baixar orçamento PDF"}</button>
               <button className="icon-button" aria-label="Fechar orçamento da última venda" onClick={() => setLastQuotation(null)}><X size={16} /></button>
             </section>
@@ -617,7 +631,7 @@ export default function Workspace({
           )}
           <div className="page-heading">
             <div>
-              <span className="eyebrow">ITAPÊ EXTINTORES / GESTÃO</span>
+              <span className="eyebrow">{store.company?.name || "EXTINPRO"} / GESTÃO</span>
               <h1>
                 <span>
                   {page === "overview"
@@ -666,7 +680,7 @@ export default function Workspace({
               )}
             </div>
           </div>
-          {page !== "stock" && page !== "settings" && page !== "validity" && (
+          {page !== "stock" && page !== "settings" && page !== "validity" && page !== "quotations" && (
             <div className="period-bar">
               <div className="segmented" data-active={period}>
                 {/* Indicador que desliza entre as opções em vez de piscar. */}
@@ -992,6 +1006,75 @@ export default function Workspace({
               </div>
             </>
           )}
+          {page === "quotations" && (
+            <section className="panel">
+              <PanelHeading
+                title="Orçamentos salvos"
+                subtitle={`${store.quotations.length} ${store.quotations.length === 1 ? "orçamento disponível" : "orçamentos disponíveis"} · todos os períodos`}
+                extra={!demo && (
+                  <button className="refresh-button" disabled={saving || refreshing} onClick={refresh}>
+                    <RefreshCw size={14} className={refreshing ? "spin" : ""} /> Atualizar
+                  </button>
+                )}
+              />
+              <div className="stock-toolbar">
+                <div className="search-field">
+                  <Search size={16} />
+                  <input
+                    aria-label="Buscar orçamento por cliente ou número"
+                    placeholder="Buscar cliente ou número do orçamento…"
+                    value={quotationQuery}
+                    onChange={(event) => { setQuotationQuery(event.target.value); setTablePage(0); }}
+                  />
+                </div>
+              </div>
+              {quotations.length ? (
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Orçamento</th>
+                        <th>Cliente</th>
+                        <th>Data da venda</th>
+                        <th>Itens</th>
+                        <th>Total</th>
+                        <th>Documento</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {quotations.slice(tablePage * 10, tablePage * 10 + 10).map((quotation) => (
+                        <tr key={quotation.id}>
+                          <td className="strong">{String(quotation.number).padStart(4, "0")}/{quotation.date.slice(0, 4)}</td>
+                          <td className="strong">{quotation.client}</td>
+                          <td>{displayDate(quotation.date)}</td>
+                          <td>{quotation.items.length} {quotation.items.length === 1 ? "item" : "itens"}</td>
+                          <td className="strong">{money(quotation.items.reduce((total, item) => total + item.quantity * item.unitPrice, 0))}</td>
+                          <td>
+                            <button
+                              className="text-button"
+                              disabled={pdfBusy || saving}
+                              onClick={() => downloadQuotation(quotation)}
+                              aria-label={`Baixar PDF do orçamento ${String(quotation.number).padStart(4, "0")}/${quotation.date.slice(0, 4)} de ${quotation.client}`}
+                            >
+                              <Download size={15} /> Baixar PDF
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <Empty
+                  title={quotationNeedle ? "Nenhum orçamento encontrado" : "Nenhum orçamento salvo ainda"}
+                  description={quotationNeedle ? "Tente outro cliente ou número de orçamento." : "Ao registrar uma venda, o orçamento fica salvo aqui para você baixar o PDF quando precisar."}
+                >
+                  {!quotationNeedle && <button onClick={() => open("sale")} disabled={saving}><Plus size={16} /> Registrar venda</button>}
+                </Empty>
+              )}
+              <Pagination count={quotations.length} page={tablePage} setPage={setTablePage} />
+            </section>
+          )}
           {page === "movements" && (
             <section className="panel">
               <PanelHeading
@@ -1033,7 +1116,6 @@ export default function Workspace({
                         <th>Data</th>
                         <th>Quantidade</th>
                         <th>Total</th>
-                        <th>Orçamento</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1057,11 +1139,6 @@ export default function Workspace({
                             <td>{m.quantity} un.</td>
                             <td className="strong">
                               {money(m.quantity * m.unitPrice)}
-                            </td>
-                            <td>
-                              {m.kind === "sale" && m.quotationId && quotationsById.has(m.quotationId) ? (
-                                <button className="text-button" disabled={pdfBusy || saving} onClick={() => downloadQuotation(quotationsById.get(m.quotationId!)!)} aria-label={`Baixar orçamento PDF da venda para ${m.party} em ${displayDate(m.date)}`}><Download size={15} /> PDF</button>
-                              ) : <span className="muted">—</span>}
                             </td>
                           </tr>
                         ))}
@@ -1201,7 +1278,7 @@ export default function Workspace({
                 }
               />
               <div className="report-brand">
-                ITAPÊ EXTINTORES · RELATÓRIO FINANCEIRO
+                {store.company?.name || "EXTINPRO"} · RELATÓRIO FINANCEIRO
               </div>
               <div className="volume-band">
                 <div>
@@ -1358,6 +1435,10 @@ export default function Workspace({
           )}
           {page === "settings" && (
             <div className="settings-grid">
+              <section className="panel company-panel">
+                <PanelHeading title="Sua empresa" subtitle="Dados exclusivos desta conta" />
+                <CompanyForm company={store.company} saving={saving || refreshing} onSave={save} />
+              </section>
               <section className="panel">
                 <PanelHeading
                   title="Sua conta"
@@ -1401,7 +1482,7 @@ export default function Workspace({
                     className="primary"
                     onClick={() =>
                       download(
-                        `itape-dados-${today()}.json`,
+                        `extinpro-dados-${today()}.json`,
                         JSON.stringify(
                           {
                             format: "itape-export-v1",
@@ -1431,7 +1512,7 @@ export default function Workspace({
           )}
           <footer className="page-footer">
             <span>
-              Itapê Extintores <i /> Feito para simplificar sua gestão.
+              ExtinPro <i /> Feito para simplificar sua gestão.
             </span>
             <span>
               {demo ? "Dados de demonstração" : "Acesso individual protegido"}

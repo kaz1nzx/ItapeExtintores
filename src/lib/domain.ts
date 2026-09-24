@@ -62,12 +62,17 @@ export type Reminder = {
 };
 export type Store = {
   version: number;
+  company: Company | null;
   products: Product[];
   movements: Movement[];
   expenses: Expense[];
   validities: Validity[];
   reminders: Reminder[];
   quotations: Quotation[];
+};
+export type Company = {
+  name: string; suffix: string; cnpj: string; address: string;
+  city: string; email: string; contact: string; phone: string;
 };
 export type Quotation = {
   id: string;
@@ -77,27 +82,26 @@ export type Quotation = {
   phone: string;
   paymentTerms: string;
   notes: string;
-  company: {
-    name: string; suffix: string; cnpj: string; address: string;
-    city: string; email: string; contact: string;
-  };
+  company: Company;
   items: { productId: string; name: string; quantity: number; unitPrice: number }[];
   createdAt: string;
 };
-// Dados também preservados pelo banco em cada orçamento emitido.
+// Padrão para contas sem cadastro. Cada orçamento preserva os dados da emissão.
 export const QUOTATION_COMPANY: Quotation["company"] = {
-  name: "Itapê Extintores e projetos de prevenção a incêndio",
-  suffix: "Ltda",
-  cnpj: "48.936.509/0001-77",
-  address: "Dino José da Silva",
-  city: "18205761 - Itapetininga /SP",
-  email: "itapeextintores@gmail.com",
-  contact: "Maicon Pontes",
+  name: "",
+  suffix: "",
+  cnpj: "",
+  address: "",
+  city: "",
+  email: "",
+  contact: "",
+  phone: "",
 };
 export const DEFAULT_PAYMENT_TERMS = "PIX, Transferência Bancária, Boleto 28 dias";
 export type User = { id: string; name: string; role: "admin" | "operator" };
 export const emptyStore = (): Store => ({
   version: 0,
+  company: null,
   products: [],
   movements: [],
   expenses: [],
@@ -108,6 +112,7 @@ export const emptyStore = (): Store => ({
 // Um banco ainda sem a atualização de validades não devolve a lista.
 export const withDefaults = (store: Store): Store => ({
   ...store,
+  company: store.company ? { ...QUOTATION_COMPANY, ...store.company } : null,
   validities: store.validities ?? [],
   reminders: store.reminders ?? [],
   quotations: store.quotations ?? [],
@@ -186,7 +191,18 @@ const quotationFields = z.object({
   paymentTerms: z.string().trim().min(1).max(240),
   notes: z.string().trim().max(1000),
 });
+export const companySchema = z.object({
+  name: text,
+  suffix: z.string().trim().max(40),
+  cnpj: z.string().trim().max(30),
+  address: z.string().trim().max(240),
+  city: z.string().trim().max(120),
+  email: z.union([z.literal(""), z.email().max(254)]),
+  contact: z.string().trim().max(120),
+  phone,
+});
 export const commandSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("company"), company: companySchema }),
   z.object({
     kind: z.literal("reminder"),
     title: text,
@@ -275,7 +291,9 @@ export function applyCommand(
   next.validities ??= [];
   next.reminders ??= [];
   next.quotations ??= [];
-  if (cmd.kind === "product") {
+  if (cmd.kind === "company") {
+    next.company = { ...cmd.company };
+  } else if (cmd.kind === "product") {
     if (
       next.products.some(
         (p) => p.sku.toLowerCase() === cmd.sku.toLowerCase() && p.id !== cmd.id,
@@ -371,7 +389,7 @@ export function applyCommand(
       phone: cmd.phone ?? "",
       paymentTerms: cmd.quotation?.paymentTerms ?? DEFAULT_PAYMENT_TERMS,
       notes: cmd.quotation?.notes ?? "",
-      company: { ...QUOTATION_COMPANY },
+      company: { ...(next.company ?? QUOTATION_COMPANY) },
       items: items.map((item) => {
         const product = next.products.find((p) => p.id === item.productId)!;
         return { productId: product.id, name: `${product.name} · ${product.capacity}`, quantity: item.quantity, unitPrice: item.unitPrice };
@@ -650,6 +668,7 @@ export function demoStore(): Store {
   });
   return {
     version: 0,
+    company: null,
     products,
     validities: [...history, ...fromSales],
     reminders: [],

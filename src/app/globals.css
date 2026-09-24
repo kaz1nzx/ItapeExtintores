@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Itapê Extintores — sistema visual "industrial editorial".
+   ExtinPro — sistema visual "industrial editorial".
    Cantos vivos, fios de 1px no lugar de sombras difusas, tipografia display
    pesada, numerais tabulares grandes e o vermelho de segurança usado com
    parcimônia. O movimento é curto e direcional: nada pisca, nada flutua à toa.
@@ -1746,6 +1746,30 @@ tbody tr:hover td:first-child::before {
 }
 .settings-body {
   padding: 22px;
+}
+.company-panel {
+  grid-column: 1 / -1;
+}
+.company-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.company-form button {
+  margin-top: 20px;
+}
+.workspace-switch {
+  width: 100%;
+  text-align: left;
+  flex-shrink: 0;
+  white-space: normal;
+}
+.workspace-switch > span:nth-child(2) {
+  min-width: 0;
+}
+.workspace-switch strong, .workspace-switch small {
+  overflow-wrap: anywhere;
 }
 .settings-avatar {
   background: var(--ink);

@@ -13,7 +13,7 @@ const mono = IBM_Plex_Mono({
   display: "swap",
 });
 export const metadata: Metadata = {
-  title: "Itapê Extintores · Gestão",
+  title: "ExtinPro · Gestão",
   description: "Estoque e financeiro em um só lugar.",
   robots: { index: false, follow: false },
 };

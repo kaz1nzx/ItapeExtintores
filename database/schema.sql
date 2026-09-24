@@ -1,4 +1,4 @@
--- Itapê Extintores. Monetary values are integer cents; taxes are percentages.
+-- ExtinPro. Monetary values are integer cents; taxes are percentages.
 -- No existing objects are removed and no sample business data is inserted.
 create schema if not exists itape_private;
 revoke all on schema itape_private from public, anon;
