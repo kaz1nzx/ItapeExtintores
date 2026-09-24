@@ -41,6 +41,7 @@ import {
   type Store,
   type User,
   type Validity,
+  type Quotation,
   ALERT_DAYS,
   money,
   summarize,
@@ -129,6 +130,9 @@ export default function Workspace({
     error?: boolean;
   } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [lastQuotation, setLastQuotation] = useState<Quotation | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const pdfLock = useRef(false);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [synced, setSynced] = useState<string | null>(null);
@@ -163,6 +167,7 @@ export default function Workspace({
   );
   const reminderAlerts = store.reminders.filter((r) => reminderNeedsAttention(r, calendarToday));
   const calendarAlerts = dueSoon.length + reminderAlerts.length;
+  const quotationsById = new Map(store.quotations.map((q) => [q.id, q]));
   const stockUnits = products.reduce((a, p) => a + p.stock, 0);
   const stockValue = products.reduce((a, p) => a + p.stock * p.cost, 0);
   const filteredProducts = products.filter(
@@ -194,11 +199,26 @@ export default function Workspace({
     if (busy.current) return;
     setForm({ mode, product, validity });
   }
+  async function downloadQuotation(quotation: Quotation) {
+    if (pdfLock.current) return;
+    pdfLock.current = true;
+    setPdfBusy(true);
+    try {
+      const { downloadQuotationPdf } = await import("@/lib/quotation-pdf");
+      await downloadQuotationPdf(quotation, demo);
+    } catch {
+      setNotice({ error: true, message: "A venda está salva, mas não foi possível baixar o PDF. Use Baixar orçamento PDF para tentar novamente." });
+    } finally {
+      pdfLock.current = false;
+      setPdfBusy(false);
+    }
+  }
   async function save(command: Command, requestId: string) {
     if (busy.current) throw new Error("Aguarde a operação em andamento.");
     const before = store;
     let recovery: Store | undefined;
     const optimistic = applyCommand(before, command, user, requestId);
+    let confirmed = optimistic;
     busy.current = true;
     setSaving(true);
     setStore(optimistic);
@@ -219,6 +239,7 @@ export default function Workspace({
           throw new Error(result.error);
         }
         receive(result);
+        confirmed = withDefaults(result);
         setSynced(
           new Date().toLocaleTimeString("pt-BR", {
             hour: "2-digit",
@@ -250,6 +271,15 @@ export default function Workspace({
     } finally {
       busy.current = false;
       setSaving(false);
+    }
+    if (command.kind === "sale" || (command.kind === "batch" && command.operation === "sale")) {
+      const quotation = confirmed.quotations.find((q) => q.id === requestId);
+      if (quotation) {
+        setLastQuotation(quotation);
+        await downloadQuotation(quotation);
+      } else {
+        setNotice({ error: true, message: "Venda salva. O banco precisa da atualização database/upgrade.sql para disponibilizar o orçamento em PDF." });
+      }
     }
   }
   async function refresh() {
@@ -560,6 +590,13 @@ export default function Workspace({
         {/* key={page} remonta o bloco: o título recorta e os números recontam
             a cada troca de seção. */}
         <main id="content" className="content page-swap" key={page}>
+          {lastQuotation && (
+            <section className="sale-pdf-notice" aria-label="Orçamento da venda registrada">
+              <div><strong>Venda registrada · {lastQuotation.client}</strong><p>Orçamento {String(lastQuotation.number).padStart(4, "0")}/{lastQuotation.date.slice(0, 4)} disponível. Você também pode baixá-lo em Movimentações.</p></div>
+              <button disabled={pdfBusy} onClick={() => downloadQuotation(lastQuotation)}><Download size={16} /> {pdfBusy ? "Gerando PDF…" : "Baixar orçamento PDF"}</button>
+              <button className="icon-button" aria-label="Fechar orçamento da última venda" onClick={() => setLastQuotation(null)}><X size={16} /></button>
+            </section>
+          )}
           {reminderAlerts.length > 0 && (
             <div className="reminder-notification" role="status">
               <Bell size={20} aria-hidden="true" />
@@ -996,6 +1033,7 @@ export default function Workspace({
                         <th>Data</th>
                         <th>Quantidade</th>
                         <th>Total</th>
+                        <th>Orçamento</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1019,6 +1057,11 @@ export default function Workspace({
                             <td>{m.quantity} un.</td>
                             <td className="strong">
                               {money(m.quantity * m.unitPrice)}
+                            </td>
+                            <td>
+                              {m.kind === "sale" && m.quotationId && quotationsById.has(m.quotationId) ? (
+                                <button className="text-button" disabled={pdfBusy || saving} onClick={() => downloadQuotation(quotationsById.get(m.quotationId!)!)} aria-label={`Baixar orçamento PDF da venda para ${m.party} em ${displayDate(m.date)}`}><Download size={15} /> PDF</button>
+                              ) : <span className="muted">—</span>}
                             </td>
                           </tr>
                         ))}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Bell, Check, Plus, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Bell, Check, Plus, TriangleAlert } from "lucide-react";
 import { daysBetween, reminderNeedsAttention, type Command, type Reminder } from "@/lib/domain";
 
 const display = (date: string) => date.split("-").reverse().join("/");
@@ -14,7 +14,7 @@ export function reminderLabel(date: string, now: string) {
   return `Em ${days} dias`;
 }
 
-export default function RemindersPanel({ reminders, day, now, busy, ready, onSave, onSelect }: {
+export default function RemindersPanel({ reminders, day, now, busy, ready, onSave, onSelect, onBack }: {
   reminders: Reminder[];
   day: string | null;
   now: string;
@@ -22,6 +22,7 @@ export default function RemindersPanel({ reminders, day, now, busy, ready, onSav
   ready: boolean;
   onSave: (command: Command, requestId: string) => Promise<void>;
   onSelect: (date: string) => void;
+  onBack: () => void;
 }) {
   const [error, setError] = useState("");
   const completionRequests = useRef(new Map<string, string>());
@@ -50,6 +51,13 @@ export default function RemindersPanel({ reminders, day, now, busy, ready, onSav
         </div>
         {alerts.length > 0 && <span className="count-badge" title="Lembretes que precisam de atenção">{alerts.length}</span>}
       </div>
+      {day && (
+        <div className="reminder-help">
+          <button type="button" className="text-button" onClick={onBack} disabled={busy}>
+            <ArrowLeft size={16} /> Voltar aos seus lembretes
+          </button>
+        </div>
+      )}
       {!ready ? (
         <p className="reminder-help">Atualize o banco com database/upgrade.sql para salvar lembretes.</p>
       ) : day ? (

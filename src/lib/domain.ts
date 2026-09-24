@@ -15,6 +15,7 @@ export type Product = {
 };
 export type Movement = {
   id: string;
+  quotationId?: string | null;
   productId: string;
   productName: string;
   kind: "sale" | "purchase";
@@ -66,7 +67,34 @@ export type Store = {
   expenses: Expense[];
   validities: Validity[];
   reminders: Reminder[];
+  quotations: Quotation[];
 };
+export type Quotation = {
+  id: string;
+  number: number;
+  date: string;
+  client: string;
+  phone: string;
+  paymentTerms: string;
+  notes: string;
+  company: {
+    name: string; suffix: string; cnpj: string; address: string;
+    city: string; email: string; contact: string;
+  };
+  items: { productId: string; name: string; quantity: number; unitPrice: number }[];
+  createdAt: string;
+};
+// Dados também preservados pelo banco em cada orçamento emitido.
+export const QUOTATION_COMPANY: Quotation["company"] = {
+  name: "Itapê Extintores e projetos de prevenção a incêndio",
+  suffix: "Ltda",
+  cnpj: "48.936.509/0001-77",
+  address: "Dino José da Silva",
+  city: "18205761 - Itapetininga /SP",
+  email: "itapeextintores@gmail.com",
+  contact: "Maicon Pontes",
+};
+export const DEFAULT_PAYMENT_TERMS = "PIX, Transferência Bancária, Boleto 28 dias";
 export type User = { id: string; name: string; role: "admin" | "operator" };
 export const emptyStore = (): Store => ({
   version: 0,
@@ -75,12 +103,14 @@ export const emptyStore = (): Store => ({
   expenses: [],
   validities: [],
   reminders: [],
+  quotations: [],
 });
 // Um banco ainda sem a atualização de validades não devolve a lista.
 export const withDefaults = (store: Store): Store => ({
   ...store,
   validities: store.validities ?? [],
   reminders: store.reminders ?? [],
+  quotations: store.quotations ?? [],
 });
 export const money = (cents: number) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -152,6 +182,10 @@ const phone = z
   .trim()
   .max(30)
   .regex(/^[0-9+(). -]*$/, "Informe um telefone válido.");
+const quotationFields = z.object({
+  paymentTerms: z.string().trim().min(1).max(240),
+  notes: z.string().trim().max(1000),
+});
 export const commandSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("reminder"),
@@ -188,6 +222,7 @@ export const commandSchema = z.discriminatedUnion("kind", [
     party: text,
     phone: phone.optional(),
     track: z.boolean().optional(),
+    quotation: quotationFields.optional(),
   }),
   // Vários produtos na mesma remessa. A data e a contraparte são
   // compartilhadas; cada item vira uma movimentação, tudo em uma transação.
@@ -198,6 +233,7 @@ export const commandSchema = z.discriminatedUnion("kind", [
     party: text,
     phone: phone.optional(),
     track: z.boolean().optional(),
+    quotation: quotationFields.optional(),
     items: z
       .array(z.object({ productId: text, quantity, unitPrice: cents }))
       .min(1)
@@ -238,6 +274,7 @@ export function applyCommand(
   const next = structuredClone(store);
   next.validities ??= [];
   next.reminders ??= [];
+  next.quotations ??= [];
   if (cmd.kind === "product") {
     if (
       next.products.some(
@@ -323,6 +360,27 @@ export function applyCommand(
       });
     }
   } else registerMovement(next, cmd, cmd.kind, cmd, actor, id, createdAt);
+  if (cmd.kind === "sale" || (cmd.kind === "batch" && cmd.operation === "sale")) {
+    const items = cmd.kind === "batch" ? cmd.items : [cmd];
+    next.quotations.push({
+      id,
+      number: next.quotations.filter((q) => q.date.slice(0, 4) === cmd.date.slice(0, 4))
+        .reduce((max, q) => Math.max(max, q.number), 0) + 1,
+      date: cmd.date,
+      client: cmd.party,
+      phone: cmd.phone ?? "",
+      paymentTerms: cmd.quotation?.paymentTerms ?? DEFAULT_PAYMENT_TERMS,
+      notes: cmd.quotation?.notes ?? "",
+      company: { ...QUOTATION_COMPANY },
+      items: items.map((item) => {
+        const product = next.products.find((p) => p.id === item.productId)!;
+        return { productId: product.id, name: `${product.name} · ${product.capacity}`, quantity: item.quantity, unitPrice: item.unitPrice };
+      }),
+      createdAt,
+    });
+    const movementIds = new Set(items.map((_, i) => cmd.kind === "batch" ? `${id}-${i}` : id));
+    next.movements.forEach((movement) => { if (movementIds.has(movement.id)) movement.quotationId = id; });
+  }
   next.version += 1;
   return next;
 }
@@ -595,6 +653,7 @@ export function demoStore(): Store {
     products,
     validities: [...history, ...fromSales],
     reminders: [],
+    quotations: [],
     movements: [...movements, ...restocks].sort((a, b) =>
       a.date.localeCompare(b.date),
     ),

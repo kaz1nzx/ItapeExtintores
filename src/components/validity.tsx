@@ -161,7 +161,7 @@ export default function ValidityPage({
           reminders={reminders}
         />
         <div className="agenda-column">
-        <RemindersPanel reminders={reminders} day={day} now={now} busy={busy} ready={remindersReady} onSave={onSaveReminder} onSelect={(date) => { setDay(date); setMonth(date.slice(0, 7)); }} />
+        <RemindersPanel reminders={reminders} day={day} now={now} busy={busy} ready={remindersReady} onSave={onSaveReminder} onSelect={(date) => { setDay(date); setMonth(date.slice(0, 7)); }} onBack={() => setDay(null)} />
         <section className="panel agenda-panel">
           <div className="panel-heading">
             <div>

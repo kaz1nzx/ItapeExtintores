@@ -4,6 +4,7 @@ import { Info, ArrowRight, Plus, Trash2 } from "lucide-react";
 import {
   ALERT_DAYS,
   VALIDITY_MONTHS,
+  DEFAULT_PAYMENT_TERMS,
   addMonths,
   money,
   today,
@@ -185,10 +186,11 @@ export default function OperationForm({
     else {
       // Só vendas agendam validade; na compra estes campos nem existem.
       const contact =
-        tracking
+        mode === "sale"
           ? {
               ...(str("phone") ? { phone: str("phone") } : {}),
-              track: f.get("track") === "on",
+              track: tracking && f.get("track") === "on",
+              quotation: { paymentTerms: str("paymentTerms"), notes: str("quotationNotes") },
             }
           : {};
       const items = lines.map((l) => ({
@@ -610,7 +612,7 @@ export default function OperationForm({
                 <Plus size={15} />
                 Adicionar novo item
               </button>
-              <div className={`form-grid ${tracking ? "three" : ""}`}>
+              <div className={`form-grid ${mode === "sale" ? "three" : ""}`}>
                 <label>
                   Data
                   <input
@@ -634,13 +636,26 @@ export default function OperationForm({
                     maxLength={120}
                   />
                 </label>
-                {tracking && (
+                {mode === "sale" && (
                   <label>
                     WhatsApp <span className="optional">(opcional)</span>
                     {phoneField}
                   </label>
                 )}
               </div>
+              {mode === "sale" && (
+                <>
+                  <label>
+                    Condições de pagamento
+                    <input name="paymentTerms" required maxLength={240} defaultValue={DEFAULT_PAYMENT_TERMS} />
+                  </label>
+                  <label>
+                    Observações do orçamento <span className="optional">(opcional)</span>
+                    <textarea name="quotationNotes" rows={2} maxLength={1000} placeholder="Ex.: Prazo de entrega e detalhes combinados com o cliente" />
+                  </label>
+                  <div className="hint"><Info size={16} /> Ao confirmar a venda, o orçamento será baixado em PDF.</div>
+                </>
+              )}
               {tracking && (
                 <label className="check">
                   <input type="checkbox" name="track" defaultChecked />
@@ -695,7 +710,9 @@ export default function OperationForm({
                     ? "Registrar renovação"
                     : mode === "dismiss"
                       ? "Dispensar lembrete"
-                      : "Salvar registro"}
+                      : mode === "sale"
+                        ? "Salvar venda e gerar PDF"
+                        : "Salvar registro"}
               {!busy && <ArrowRight size={16} />}
             </button>
           </div>

@@ -38,6 +38,7 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 2. Em **Estoque → Novo produto**, informe código, tipo, capacidade, custo, preço de venda, estoque mínimo e alíquota.
 3. Em **Entrada de estoque**, registre as quantidades, o custo de compra e o fornecedor. O cadastro começa com estoque zero.
 4. Use **Nova venda** para registrar cliente, quantidade, preço e data. A baixa de estoque acontece na mesma transação da venda. Informe o WhatsApp do cliente e mantenha **Agendar lembrete de validade** marcado: os extintores vendidos entram no calendário com vencimento em 12 meses.
+   Preencha também as condições de pagamento e, se necessário, as observações. Ao clicar em **Salvar venda e gerar PDF**, o sistema baixa um orçamento numerado com os dados da empresa, cliente, data, todos os produtos, quantidades, valores unitários, subtotais e total. Para baixar novamente, use **Movimentações → PDF**. O orçamento preserva os dados da venda mesmo que o cadastro do produto seja alterado depois. Se o download falhar, tente novamente pelo botão **Baixar orçamento PDF**, sem registrar outra venda.
 5. Em **Validades**, acompanhe quem precisa de contato: o cliente aparece 30 dias antes do vencimento, com **Avisar** (abre o WhatsApp com a mensagem pronta), **Renovar** (registra a recarga e abre o próximo ciclo de 12 meses) e dispensa. Recargas feitas fora do sistema entram por **Registrar validade**.
 6. Lance aluguel, transporte e outros gastos em **Financeiro → Nova despesa**. Não lance a compra de extintores novamente como despesa.
 7. Em **Relatórios**, selecione semana ou mês; baixe CSV ou use **Imprimir / PDF**. Para gerar PDF, escolha “Salvar como PDF” na janela de impressão.
@@ -52,6 +53,7 @@ Em **Validades**, clique em qualquer dia do calendário para salvar um lembrete,
 - Alertas por estoque mínimo e arquivamento de produtos sem saldo.
 - Compras com custo médio ponderado, vendas com baixa de estoque e histórico de movimentações.
 - Compras e vendas com vários produtos na mesma remessa, registradas em uma única transação.
+- Orçamento em PDF após salvar cada venda, com numeração por ano, condições de pagamento, observações e download pelo histórico. Fontes Noto Sans incorporadas preservam acentos e símbolos; licença em `public/fonts/OFL.txt`.
 - Calendário de validades: cada venda agenda o vencimento de 12 meses para o cliente; aviso 30 dias antes na Visão geral, no menu e na barra superior; mensagem pronta no WhatsApp; renovação que reinicia o ciclo.
 - Valores de custo, preço e alíquota preservados em cada venda.
 - Despesas operacionais, composição do resultado e saldo operacional estimado.

@@ -10,6 +10,35 @@
 --   2. Calendário de validades: cada venda agenda o vencimento de 12 meses dos
 --      extintores do cliente, com registro manual, renovação e dispensa.
 --   3. Lembretes livres por data, com observações e conclusão.
+--   4. Orçamentos numerados e preservados junto de cada venda.
+
+create table if not exists public.itape_quotations (
+  id uuid primary key,
+  owner_id uuid not null references auth.users(id),
+  number integer not null check (number > 0),
+  year integer not null,
+  date date not null check (extract(year from date) = year),
+  client text not null check (length(trim(client)) between 1 and 120),
+  phone text not null default '' check (length(phone) <= 30 and phone ~ '^[0-9+(). -]*$'),
+  payment_terms text not null check (length(trim(payment_terms)) between 1 and 240),
+  notes text not null default '' check (length(notes) <= 1000),
+  company jsonb not null check (jsonb_typeof(company) = 'object'),
+  items jsonb not null check (jsonb_typeof(items) = 'array' and jsonb_array_length(items) between 1 and 20),
+  created_at timestamptz not null default now(),
+  unique(owner_id, year, number)
+);
+alter table public.itape_quotations enable row level security;
+do $$
+begin
+  if not exists (select 1 from pg_catalog.pg_policies where schemaname = 'public' and tablename = 'itape_quotations' and policyname = 'owner_read') then
+    create policy owner_read on public.itape_quotations for select to authenticated using (owner_id = (select auth.uid()));
+  end if;
+end;
+$$;
+revoke all on public.itape_quotations from anon, authenticated;
+grant select on public.itape_quotations to authenticated;
+alter table public.itape_movements add column if not exists quotation_id uuid references public.itape_quotations(id);
+create index if not exists itape_movements_quotation on public.itape_movements(quotation_id);
 
 create table if not exists public.itape_reminders (
   id uuid primary key,
@@ -63,7 +92,8 @@ language sql stable security invoker set search_path = '' as $$
   select jsonb_build_object(
     'version', coalesce((select version from public.itape_accounts where owner_id = (select auth.uid())), 0),
     'products', coalesce((select jsonb_agg(to_jsonb(p) - 'owner_id' order by p.sku) from public.itape_products p where owner_id = (select auth.uid())), '[]'::jsonb),
-    'movements', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'productId', m.product_id, 'productName', m.product_name, 'kind', m.kind, 'quantity', m.quantity, 'unitPrice', m.unit_price, 'unitCost', m.unit_cost, 'tax', m.tax, 'date', m.date, 'party', m.party, 'actor', m.actor, 'createdAt', m.created_at) order by m.date, m.created_at) from public.itape_movements m where owner_id = (select auth.uid())), '[]'::jsonb),
+    'movements', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'quotationId', m.quotation_id, 'productId', m.product_id, 'productName', m.product_name, 'kind', m.kind, 'quantity', m.quantity, 'unitPrice', m.unit_price, 'unitCost', m.unit_cost, 'tax', m.tax, 'date', m.date, 'party', m.party, 'actor', m.actor, 'createdAt', m.created_at) order by m.date, m.created_at) from public.itape_movements m where owner_id = (select auth.uid())), '[]'::jsonb),
+    'quotations', coalesce((select jsonb_agg(jsonb_build_object('id', q.id, 'number', q.number, 'date', q.date, 'client', q.client, 'phone', q.phone, 'paymentTerms', q.payment_terms, 'notes', q.notes, 'company', q.company, 'items', q.items, 'createdAt', q.created_at) order by q.date, q.number) from public.itape_quotations q where owner_id = (select auth.uid())), '[]'::jsonb),
     'expenses', coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'description', e.description, 'amount', e.amount, 'date', e.date, 'actor', e.actor, 'createdAt', e.created_at) order by e.date, e.created_at) from public.itape_expenses e where owner_id = (select auth.uid())), '[]'::jsonb),
     'validities', coalesce((select jsonb_agg(jsonb_build_object('id', v.id, 'client', v.client, 'phone', v.phone, 'item', v.item, 'quantity', v.quantity, 'startDate', v.start_date, 'dueDate', v.due_date, 'status', v.status, 'movementId', v.movement_id, 'resolvedAt', v.resolved_at, 'createdAt', v.created_at) order by v.due_date, v.created_at) from public.itape_validities v where owner_id = (select auth.uid())), '[]'::jsonb),
     'reminders', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'title', r.title, 'date', r.date, 'notes', r.notes, 'status', r.status, 'createdAt', r.created_at) order by r.date, r.created_at) from public.itape_reminders r where owner_id = (select auth.uid())), '[]'::jsonb)
@@ -90,6 +120,8 @@ declare
   item jsonb;
   item_count integer;
   track boolean;
+  quotation_items jsonb;
+  quotation_number integer;
   local_today date := (now() at time zone 'America/Sao_Paulo')::date;
 begin
   if uid is null or coalesce((auth.jwt()->>'is_anonymous')::boolean, false) then raise exception 'Autenticação necessária.'; end if;
@@ -104,6 +136,23 @@ begin
   select version into current_version from public.itape_accounts where owner_id = uid for update;
   if current_version <> expected_version then raise exception 'Os dados mudaram. Atualize e tente novamente.'; end if;
   actor_name := coalesce(nullif(auth.jwt()->>'email', ''), uid::text);
+  -- Numeração e venda compartilham o bloqueio da conta e a mesma transação.
+  -- Repetir request_id retorna antes daqui, sem duplicar orçamento ou estoque.
+  if k = 'sale' or (k = 'batch' and command->>'operation' = 'sale') then
+    movement_date := (command->>'date')::date;
+    if movement_date is null or movement_date > local_today or movement_date < '2000-01-01'::date then raise exception 'Data inválida.'; end if;
+    quotation_items := '[]'::jsonb;
+    for item in select value from pg_catalog.jsonb_array_elements(case when k = 'batch' then command->'items' else jsonb_build_array(command) end) loop
+      select * into p from public.itape_products where id = (item->>'productId')::uuid and owner_id = uid and active;
+      if not found then raise exception 'Produto não encontrado.'; end if;
+      quotation_items := quotation_items || jsonb_build_array(jsonb_build_object('productId', p.id, 'name', p.name || ' · ' || p.capacity, 'quantity', (item->>'quantity')::integer, 'unitPrice', (item->>'unitPrice')::bigint));
+    end loop;
+    select coalesce(max(number), 0) + 1 into quotation_number from public.itape_quotations where owner_id = uid and year = extract(year from movement_date)::integer;
+    insert into public.itape_quotations(id, owner_id, number, year, date, client, phone, payment_terms, notes, company, items)
+    values(request_id, uid, quotation_number, extract(year from movement_date)::integer, movement_date, trim(command->>'party'), trim(coalesce(command->>'phone', '')),
+      trim(coalesce(command->'quotation'->>'paymentTerms', 'PIX, Transferência Bancária, Boleto 28 dias')), trim(coalesce(command->'quotation'->>'notes', '')),
+      jsonb_build_object('name', 'Itapê Extintores e projetos de prevenção a incêndio', 'suffix', 'Ltda', 'cnpj', '48.936.509/0001-77', 'address', 'Dino José da Silva', 'city', '18205761 - Itapetininga /SP', 'email', 'itapeextintores@gmail.com', 'contact', 'Maicon Pontes'), quotation_items);
+  end if;
   if k = 'product' then
     if command->>'id' is not null then
       pid := (command->>'id')::uuid;
@@ -145,8 +194,8 @@ begin
       if movement_date < last_date then raise exception 'A data deve ser igual ou posterior à última movimentação do produto.'; end if;
       if op = 'sale' and p.stock < q then raise exception 'Estoque insuficiente de %. Disponível: % unidades.', p.name, p.stock; end if;
       mid := pg_catalog.gen_random_uuid();
-      insert into public.itape_movements(id, owner_id, product_id, product_name, kind, quantity, unit_price, unit_cost, tax, date, party, actor)
-      values(mid, uid, p.id, p.name, op, q, price_cents, case when op = 'sale' then p.cost else price_cents end, case when op = 'sale' then p.tax else 0 end, movement_date, trim(command->>'party'), actor_name);
+      insert into public.itape_movements(id, owner_id, product_id, product_name, kind, quantity, unit_price, unit_cost, tax, date, party, actor, quotation_id)
+      values(mid, uid, p.id, p.name, op, q, price_cents, case when op = 'sale' then p.cost else price_cents end, case when op = 'sale' then p.tax else 0 end, movement_date, trim(command->>'party'), actor_name, case when op = 'sale' then request_id else null end);
       if op = 'sale' then
         update public.itape_products set stock = stock - q where id = p.id and owner_id = uid;
       else
@@ -205,8 +254,8 @@ begin
       select max(date) into last_date from public.itape_movements where owner_id = uid and product_id = p.id;
       if movement_date < last_date then raise exception 'A data deve ser igual ou posterior à última movimentação do produto.'; end if;
       if k = 'sale' and p.stock < q then raise exception 'Estoque insuficiente.'; end if;
-      insert into public.itape_movements(id, owner_id, product_id, product_name, kind, quantity, unit_price, unit_cost, tax, date, party, actor)
-      values(request_id, uid, p.id, p.name, k, q, price_cents, case when k = 'sale' then p.cost else price_cents end, case when k = 'sale' then p.tax else 0 end, movement_date, trim(command->>'party'), actor_name);
+      insert into public.itape_movements(id, owner_id, product_id, product_name, kind, quantity, unit_price, unit_cost, tax, date, party, actor, quotation_id)
+      values(request_id, uid, p.id, p.name, k, q, price_cents, case when k = 'sale' then p.cost else price_cents end, case when k = 'sale' then p.tax else 0 end, movement_date, trim(command->>'party'), actor_name, case when k = 'sale' then request_id else null end);
       if k = 'sale' then
         update public.itape_products set stock = stock - q where id = p.id and owner_id = uid;
         if coalesce((command->>'track')::boolean, true) then

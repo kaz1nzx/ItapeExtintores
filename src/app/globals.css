@@ -2565,6 +2565,11 @@ tfoot td {
 }
 
 .agenda-column { display: grid; gap: 22px; min-width: 0; }
+.sale-pdf-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 18px 20px; margin-bottom: 22px; border: 1px solid var(--line); background: var(--surface); }
+.sale-pdf-notice > div { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.sale-pdf-notice strong { font-size: 14px; }
+.sale-pdf-notice p { margin: 5px 0 0; font-size: 13px; color: var(--steel); }
+.modal textarea { width: 100%; padding: 11px 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; resize: vertical; }
 .reminders-panel h2 { display: flex; align-items: center; gap: 8px; }
 .reminder-form { display: grid; gap: 8px; padding: 20px; border-bottom: 1px solid var(--line); }
 .reminder-form label { font-size: 13px; font-weight: 600; }
