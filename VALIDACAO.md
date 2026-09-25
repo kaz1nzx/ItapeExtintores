@@ -24,3 +24,16 @@ Verificado em 22/09/2026, com Node.js 24.21.0 e Next.js 16.3.6.
 ## Correção adicional no projeto Supabase
 
 A função preexistente `public.rls_auto_enable()`, usada como event trigger para habilitar RLS, tinha execução concedida a papéis da API. Foi revogada somente a execução direta para `PUBLIC`, `anon` e `authenticated`, preservando sua execução automática por evento. A função interna de lançamentos da aplicação está em esquema privado e valida o proprietário.
+
+## Painel de administração (24/09/2026)
+
+- `npm test` (51 testes, 6 novos para cobrança, resumo das contas, próximo vencimento e validação dos comandos), `npm run check` e `npm run build`: aprovados.
+- SQL executado de verdade em PGlite 0.5.8 (PostgreSQL 18), com uma simulação mínima do esquema `auth` e dos papéis `anon`/`authenticated` do Supabase: `schema.sql`, o `upgrade.sql` anterior, o novo `upgrade.sql` aplicado duas vezes seguidas, `verify.sql` e `tests/company-isolation.sql`. Todos aprovados. Como controle, o novo `verify.sql` falha no banco sem a atualização.
+- `verify.sql` passou a cobrir: conta suspensa sem leitura (`itape_state` e tabelas) nem gravação; conta comum sem acesso ao painel e aos comandos de administrador; tabelas de assinatura fechadas à leitura direta; administrador não pode ser suspenso; pagamento avança um mês com corte de fim de mês (31/01 → 28/02); pagamento repetido recusado; dados de volta após a reativação.
+- Navegador Edge, com dados fictícios em uma rota temporária já removida: visão geral, dica do gráfico, contas, filtros, janelas de suspensão, pagamento e assinatura, tela de acesso suspenso e link **Administração** no menu. Inspecionado em 1440, 1280 e 390 px, sem transbordamento horizontal da página; a coluna de ações da tabela fica sempre visível.
+- Sem login, `/admin` redireciona para `/login`, e a gravação pelo painel retorna 401 com a mensagem exibida na janela.
+
+### Limites
+
+- O `upgrade.sql` não foi executado no projeto Supabase real, e o painel não foi aberto com uma conta administradora real. Falta aplicar a atualização e cadastrar o administrador (README, seção Administração).
+- PGlite não é o Supabase: o esquema `auth` foi simulado. Leitura de `auth.users` e das colunas `last_sign_in_at`/`is_anonymous` depende do projeto real.

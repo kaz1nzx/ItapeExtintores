@@ -78,5 +78,67 @@ begin
 end;
 $$;
 reset role;
-select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, multi-item batch, validity scheduling, renewal, dismissal, owner isolation, anonymous denial' as verification;
+-- Subscriptions: a suspended account neither reads nor writes; only the admin manages them.
+select set_config('itape.test_admin', gen_random_uuid()::text, true);
+insert into auth.users(id, aud, role, email)
+values(current_setting('itape.test_admin')::uuid, 'authenticated', 'authenticated', 'itape-admin-test-' || current_setting('itape.test_admin') || '@example.invalid');
+insert into itape_private.admins(user_id) values(current_setting('itape.test_admin')::uuid);
+do $$
+declare
+  customer uuid := current_setting('itape.test_uid')::uuid;
+  admin uuid := current_setting('itape.test_admin')::uuid;
+  o jsonb;
+  s jsonb;
+  account jsonb;
+  blocked boolean;
+begin
+  execute 'set local role authenticated';
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', customer, 'role', 'authenticated')::text, true);
+  if public.itape_access() <> '{"active": true, "admin": false}'::jsonb then raise exception 'Test failed: customer access'; end if;
+  blocked := false;
+  begin perform public.itape_admin_overview(); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: customer opened admin overview'; end if;
+  blocked := false;
+  begin perform public.itape_admin_command(jsonb_build_object('kind','status','accountId',customer,'status','suspended')); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: customer ran admin command'; end if;
+  blocked := false;
+  begin perform 1 from itape_private.subscriptions; exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'Test failed: direct subscription read'; end if;
+
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', admin, 'role', 'authenticated')::text, true);
+  if public.itape_access() <> '{"active": true, "admin": true}'::jsonb then raise exception 'Test failed: admin access'; end if;
+  o := public.itape_admin_command(jsonb_build_object('kind','status','accountId',customer,'status','suspended'));
+  select a into account from jsonb_array_elements(o->'accounts') a where a->>'id' = customer::text;
+  if account->>'status' <> 'suspended' or (account->>'products')::int <> 1 or (account->>'operations30')::int < 1 then raise exception 'Test failed: suspension in overview'; end if;
+  if jsonb_array_length(o->'activity') <> 30 then raise exception 'Test failed: activity window'; end if;
+  blocked := false;
+  begin perform public.itape_admin_command(jsonb_build_object('kind','status','accountId',admin,'status','suspended')); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: admin account suspended'; end if;
+
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', customer, 'role', 'authenticated')::text, true);
+  if (public.itape_access()->>'active')::boolean then raise exception 'Test failed: suspended access reported active'; end if;
+  blocked := false;
+  begin perform public.itape_state(); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: suspended account read state'; end if;
+  blocked := false;
+  begin perform public.itape_command(jsonb_build_object('kind','expense','description','Fixture','amount',100,'date',(now() at time zone 'America/Sao_Paulo')::date), gen_random_uuid(), 9); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: suspended account wrote'; end if;
+  if exists(select 1 from public.itape_products) then raise exception 'Test failed: suspended account read a table'; end if;
+
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', admin, 'role', 'authenticated')::text, true);
+  perform public.itape_admin_command(jsonb_build_object('kind','plan','accountId',customer,'monthlyFee',14990,'paidUntil','2026-01-31','notes','  Plano mensal  '));
+  o := public.itape_admin_command(jsonb_build_object('kind','payment','accountId',customer,'paidUntil','2026-01-31','reactivate',true));
+  select a into account from jsonb_array_elements(o->'accounts') a where a->>'id' = customer::text;
+  if account->>'paidUntil' <> '2026-02-28' or account->>'status' <> 'active' or (account->>'monthlyFee')::int <> 14990 or account->>'notes' <> 'Plano mensal' then raise exception 'Test failed: plan and payment'; end if;
+  blocked := false;
+  begin perform public.itape_admin_command(jsonb_build_object('kind','payment','accountId',customer,'paidUntil','2026-01-31','reactivate',true)); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: repeated payment advanced twice'; end if;
+
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', customer, 'role', 'authenticated')::text, true);
+  s := public.itape_state();
+  if jsonb_array_length(s->'products') <> 1 then raise exception 'Test failed: data back after reactivation'; end if;
+  execute 'reset role';
+end;
+$$;
+select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, multi-item batch, validity scheduling, renewal, dismissal, owner isolation, anonymous denial, subscription suspension, admin-only management, payment retry' as verification;
 rollback;

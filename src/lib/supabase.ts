@@ -30,3 +30,10 @@ export async function supabase() {
     },
   );
 }
+// Cliente da sessão atual, ou null sem login válido (anônimo não conta).
+export async function signedIn() {
+  if (!configured()) return null;
+  const client = await supabase();
+  const { data, error } = await client.auth.getUser();
+  return error || !data.user || data.user.is_anonymous ? null : client;
+}

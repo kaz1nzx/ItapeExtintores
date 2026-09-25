@@ -12,6 +12,10 @@
 --   3. Lembretes livres por data, com observações e conclusão.
 --   4. Orçamentos numerados e preservados junto de cada venda.
 --   5. Cadastro da empresa por conta, preservado nos novos orçamentos.
+--   6. Contas por assinatura: suspensão de acesso e painel do administrador.
+--      Sem registro de assinatura a conta está ativa, então aplicar esta
+--      atualização não bloqueia ninguém. O administrador é definido à mão,
+--      com o comando comentado no fim deste arquivo.
 
 alter table public.itape_accounts add column if not exists company jsonb
   check (company is null or jsonb_typeof(company) = 'object');
@@ -91,9 +95,68 @@ $$;
 revoke all on public.itape_validities from anon, authenticated;
 grant select on public.itape_validities to authenticated;
 
+-- Assinaturas e administradores ficam no esquema privado: nenhuma conta lê ou
+-- altera essas tabelas diretamente, só pelas funções abaixo.
+create table if not exists itape_private.admins (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create table if not exists itape_private.subscriptions (
+  owner_id uuid primary key references auth.users(id) on delete cascade,
+  status text not null default 'active' check (status in ('active', 'suspended')),
+  monthly_fee bigint not null default 0 check (monthly_fee between 0 and 100000000),
+  paid_until date check (paid_until between '2000-01-01'::date and '2100-12-31'::date),
+  last_payment_on date,
+  notes text not null default '' check (length(notes) <= 1000),
+  status_changed_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table itape_private.admins enable row level security;
+alter table itape_private.subscriptions enable row level security;
+do $$
+begin
+  if not exists (select 1 from pg_catalog.pg_policies where schemaname = 'itape_private' and tablename = 'admins' and policyname = 'deny_direct_access') then
+    create policy deny_direct_access on itape_private.admins for all to authenticated using (false) with check (false);
+  end if;
+  if not exists (select 1 from pg_catalog.pg_policies where schemaname = 'itape_private' and tablename = 'subscriptions' and policyname = 'deny_direct_access') then
+    create policy deny_direct_access on itape_private.subscriptions for all to authenticated using (false) with check (false);
+  end if;
+end;
+$$;
+revoke all on itape_private.admins, itape_private.subscriptions from public, anon, authenticated;
+-- Atividade diária do painel do administrador.
+create index if not exists itape_requests_created on itape_private.requests(created_at);
+
+create or replace function itape_private.account_active() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select not exists(select 1 from itape_private.subscriptions where owner_id = (select auth.uid()) and status = 'suspended');
+$$;
+create or replace function itape_private.is_admin() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select (select auth.uid()) is not null
+    and not coalesce(((select auth.jwt())->>'is_anonymous')::boolean, false)
+    and exists(select 1 from itape_private.admins where user_id = (select auth.uid()));
+$$;
+create or replace function itape_private.access() returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object('active', itape_private.account_active(), 'admin', itape_private.is_admin());
+$$;
+
+-- Defesa em profundidade: mesmo consultando as tabelas diretamente, uma conta
+-- suspensa não lê registros. Os dados continuam guardados para a reativação.
+alter policy owner_read on public.itape_accounts using (owner_id = (select auth.uid()) and (select itape_private.account_active()));
+alter policy owner_read on public.itape_products using (owner_id = (select auth.uid()) and (select itape_private.account_active()));
+alter policy owner_read on public.itape_movements using (owner_id = (select auth.uid()) and (select itape_private.account_active()));
+alter policy owner_read on public.itape_expenses using (owner_id = (select auth.uid()) and (select itape_private.account_active()));
+alter policy owner_read on public.itape_quotations using (owner_id = (select auth.uid()) and (select itape_private.account_active()));
+alter policy owner_read on public.itape_reminders using (owner_id = (select auth.uid()) and (select itape_private.account_active()));
+alter policy owner_read on public.itape_validities using (owner_id = (select auth.uid()) and (select itape_private.account_active()));
+
 create or replace function public.itape_state() returns jsonb
-language sql stable security invoker set search_path = '' as $$
-  select jsonb_build_object(
+language plpgsql stable security invoker set search_path = '' as $$
+begin
+  if not itape_private.account_active() then raise exception 'Acesso suspenso. Entre em contato para reativar sua assinatura.'; end if;
+  return jsonb_build_object(
     'version', coalesce((select version from public.itape_accounts where owner_id = (select auth.uid())), 0),
     'company', (select company from public.itape_accounts where owner_id = (select auth.uid())),
     'products', coalesce((select jsonb_agg(to_jsonb(p) - 'owner_id' order by p.sku) from public.itape_products p where owner_id = (select auth.uid())), '[]'::jsonb),
@@ -103,6 +166,7 @@ language sql stable security invoker set search_path = '' as $$
     'validities', coalesce((select jsonb_agg(jsonb_build_object('id', v.id, 'client', v.client, 'phone', v.phone, 'item', v.item, 'quantity', v.quantity, 'startDate', v.start_date, 'dueDate', v.due_date, 'status', v.status, 'movementId', v.movement_id, 'resolvedAt', v.resolved_at, 'createdAt', v.created_at) order by v.due_date, v.created_at) from public.itape_validities v where owner_id = (select auth.uid())), '[]'::jsonb),
     'reminders', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'title', r.title, 'date', r.date, 'notes', r.notes, 'status', r.status, 'createdAt', r.created_at) order by r.date, r.created_at) from public.itape_reminders r where owner_id = (select auth.uid())), '[]'::jsonb)
   );
+end;
 $$;
 
 create or replace function itape_private.apply_command(command jsonb, request_id uuid, expected_version integer)
@@ -130,6 +194,7 @@ declare
   local_today date := (now() at time zone 'America/Sao_Paulo')::date;
 begin
   if uid is null or coalesce((auth.jwt()->>'is_anonymous')::boolean, false) then raise exception 'Autenticação necessária.'; end if;
+  if not itape_private.account_active() then raise exception 'Acesso suspenso. Entre em contato para reativar sua assinatura.'; end if;
   if request_id is null or expected_version is null or command is null then raise exception 'Solicitação inválida.'; end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(uid::text, 0));
   select r.command into old_command from itape_private.requests r where r.owner_id = uid and r.request_id = apply_command.request_id;
@@ -297,3 +362,127 @@ $$;
 revoke all on function public.itape_state() from public, anon;
 revoke all on function itape_private.apply_command(jsonb, uuid, integer) from public, anon;
 grant execute on function public.itape_state(), itape_private.apply_command(jsonb, uuid, integer) to authenticated;
+
+-- Painel do administrador: todas as contas de Authentication, com assinatura,
+-- uso e atividade diária dos últimos 30 dias. Mostra contagens de uso, nunca
+-- valores financeiros das empresas clientes.
+create or replace function itape_private.admin_overview() returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  local_today date := (now() at time zone 'America/Sao_Paulo')::date;
+  since timestamptz := (local_today - 29)::timestamp at time zone 'America/Sao_Paulo';
+begin
+  if not itape_private.is_admin() then raise exception 'Acesso restrito ao administrador.'; end if;
+  return jsonb_build_object(
+    'today', local_today,
+    'accounts', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', u.id,
+        'email', coalesce(u.email, ''),
+        'createdAt', u.created_at,
+        'lastSignInAt', u.last_sign_in_at,
+        'company', coalesce(a.company->>'name', ''),
+        'admin', ad.user_id is not null,
+        'status', coalesce(s.status, 'active'),
+        'monthlyFee', coalesce(s.monthly_fee, 0),
+        'paidUntil', s.paid_until,
+        'lastPaymentOn', s.last_payment_on,
+        'notes', coalesce(s.notes, ''),
+        'statusChangedAt', s.status_changed_at,
+        'products', (select count(*) from public.itape_products p where p.owner_id = u.id and p.active),
+        'sales', (select count(*) from public.itape_movements m where m.owner_id = u.id and m.kind = 'sale'),
+        'operations30', (select count(*) from itape_private.requests r where r.owner_id = u.id and r.created_at >= since),
+        'lastActivityAt', (select max(r.created_at) from itape_private.requests r where r.owner_id = u.id)
+      ) order by u.created_at)
+      from auth.users u
+      left join public.itape_accounts a on a.owner_id = u.id
+      left join itape_private.subscriptions s on s.owner_id = u.id
+      left join itape_private.admins ad on ad.user_id = u.id
+      where not coalesce(u.is_anonymous, false)
+    ), '[]'::jsonb),
+    'activity', (
+      select jsonb_agg(jsonb_build_object('date', d.day, 'operations', coalesce(x.operations, 0), 'accounts', coalesce(x.accounts, 0)) order by d.day)
+      from (select local_today - g as day from pg_catalog.generate_series(0, 29) g) d
+      left join (
+        select (r.created_at at time zone 'America/Sao_Paulo')::date as day, count(*) as operations, count(distinct r.owner_id) as accounts
+        from itape_private.requests r
+        where r.created_at >= since
+        group by 1
+      ) x on x.day = d.day
+    )
+  );
+end;
+$$;
+
+create or replace function itape_private.admin_command(command jsonb) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  k text := command->>'kind';
+  target uuid;
+  s itape_private.subscriptions%rowtype;
+  fee bigint;
+  due date;
+  reactivate boolean;
+  local_today date := (now() at time zone 'America/Sao_Paulo')::date;
+begin
+  if not itape_private.is_admin() then raise exception 'Acesso restrito ao administrador.'; end if;
+  target := (command->>'accountId')::uuid;
+  if target is null or not exists(select 1 from auth.users where id = target) then raise exception 'Conta não encontrada.'; end if;
+  insert into itape_private.subscriptions(owner_id) values(target) on conflict do nothing;
+  select * into s from itape_private.subscriptions where owner_id = target for update;
+  if k = 'status' then
+    if command->>'status' is null or command->>'status' not in ('active', 'suspended') then raise exception 'Situação inválida.'; end if;
+    if command->>'status' = 'suspended' and exists(select 1 from itape_private.admins where user_id = target) then raise exception 'Uma conta de administrador não pode ser suspensa.'; end if;
+    if s.status <> command->>'status' then
+      update itape_private.subscriptions set status = command->>'status', status_changed_at = now(), updated_at = now() where owner_id = target;
+    end if;
+  elsif k = 'plan' then
+    fee := (command->>'monthlyFee')::bigint;
+    due := (command->>'paidUntil')::date;
+    if fee is null or fee < 0 or fee > 100000000 then raise exception 'Mensalidade inválida.'; end if;
+    if due is not null and (due < '2000-01-01'::date or due > '2100-12-31'::date) then raise exception 'Data de vencimento inválida.'; end if;
+    if length(coalesce(command->>'notes', '')) > 1000 then raise exception 'As observações passam de 1000 caracteres.'; end if;
+    update itape_private.subscriptions set monthly_fee = fee, paid_until = due, notes = trim(coalesce(command->>'notes', '')), updated_at = now() where owner_id = target;
+  elsif k = 'payment' then
+    -- O pedido traz o vencimento que o administrador viu. Repetir o mesmo
+    -- pagamento (duplo clique, resposta perdida) não avança dois meses.
+    if s.paid_until is distinct from (command->>'paidUntil')::date then raise exception 'Os dados mudaram. Atualize e tente novamente.'; end if;
+    reactivate := coalesce((command->>'reactivate')::boolean, false) and s.status <> 'active';
+    update itape_private.subscriptions set
+      paid_until = (coalesce(s.paid_until, local_today) + interval '1 month')::date,
+      last_payment_on = local_today,
+      status = case when reactivate then 'active' else status end,
+      status_changed_at = case when reactivate then now() else status_changed_at end,
+      updated_at = now()
+    where owner_id = target;
+  else raise exception 'Operação desconhecida.';
+  end if;
+end;
+$$;
+
+-- Adaptadores públicos no mesmo padrão de itape_command: SECURITY INVOKER,
+-- com a regra de acesso na função privada.
+create or replace function public.itape_access() returns jsonb
+language sql stable security invoker set search_path = '' as $$
+  select itape_private.access();
+$$;
+create or replace function public.itape_admin_overview() returns jsonb
+language sql stable security invoker set search_path = '' as $$
+  select itape_private.admin_overview();
+$$;
+create or replace function public.itape_admin_command(command jsonb) returns jsonb
+language plpgsql security invoker set search_path = '' as $$
+begin
+  perform itape_private.admin_command(command);
+  return itape_private.admin_overview();
+end;
+$$;
+revoke all on function itape_private.account_active(), itape_private.is_admin(), itape_private.access(), itape_private.admin_overview(), itape_private.admin_command(jsonb) from public, anon;
+revoke all on function public.itape_access(), public.itape_admin_overview(), public.itape_admin_command(jsonb) from public, anon;
+grant execute on function itape_private.account_active(), itape_private.is_admin(), itape_private.access(), itape_private.admin_overview(), itape_private.admin_command(jsonb) to authenticated;
+grant execute on function public.itape_access(), public.itape_admin_overview(), public.itape_admin_command(jsonb) to authenticated;
+
+-- Administrador do sistema. Rode uma vez, trocando pelo e-mail da sua conta:
+--   insert into itape_private.admins(user_id)
+--   select id from auth.users where email = 'seu-email@exemplo.com'
+--   on conflict do nothing;

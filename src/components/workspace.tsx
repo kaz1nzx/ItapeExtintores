@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useRef, useEffect, type ReactNode } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import Link from "next/link";
 import {
   Flame,
@@ -34,6 +34,7 @@ import {
   Database,
   ArrowRight,
   CalendarClock,
+  ShieldUser,
 } from "lucide-react";
 import {
   applyCommand,
@@ -54,7 +55,7 @@ import {
 } from "@/lib/domain";
 import OperationForm, { type FormMode } from "./operation-form";
 import CompanyForm from "./company-form";
-import { Empty, Extinguisher, download } from "./primitives";
+import { Empty, Extinguisher, Metric, PanelHeading, download } from "./primitives";
 import { CountUp, Reveal } from "./motion";
 import Chart from "./chart";
 import ValidityPage, {
@@ -93,10 +94,12 @@ export default function Workspace({
   initial,
   user,
   demo = false,
+  admin = false,
 }: {
   initial: Store;
   user: User;
   demo?: boolean;
+  admin?: boolean;
 }) {
   const [store, setStore] = useState(() => withDefaults(initial));
   // Um banco sem database/upgrade.sql não devolve a lista de validades. Nesse
@@ -241,6 +244,8 @@ export default function Workspace({
         });
         const result = await response.json();
         if (!response.ok) {
+          // O administrador suspendeu a conta: /app mostra o aviso.
+          if (result.suspended) window.location.assign("/app");
           if (response.status === 409) {
             const refreshed = await fetch("/api/store", { cache: "no-store" });
             if (refreshed.ok) recovery = await refreshed.json();
@@ -301,7 +306,10 @@ export default function Workspace({
         signal: AbortSignal.timeout(20000),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) {
+        if (data.suspended) window.location.assign("/app");
+        throw new Error(data.error);
+      }
       receive(data);
       setSynced(
         new Date().toLocaleTimeString("pt-BR", {
@@ -527,6 +535,12 @@ export default function Workspace({
               do estoque ao resultado.
             </p>
           </div>
+          {admin && (
+            <Link className="settings-link admin-link" href="/admin">
+              <ShieldUser size={19} />
+              Administração
+            </Link>
+          )}
           <button
             className={`settings-link ${page === "settings" ? "active" : ""}`}
             onClick={() => go("settings")}
@@ -1547,63 +1561,6 @@ export default function Workspace({
           </button>
         </div>
       )}
-    </div>
-  );
-}
-function Metric({
-  index,
-  title,
-  value,
-  detail,
-  icon: Icon,
-  color,
-  highlight = false,
-}: {
-  index: number;
-  title: string;
-  value: ReactNode;
-  detail: string;
-  icon: typeof Boxes;
-  color: string;
-  highlight?: boolean;
-}) {
-  return (
-    <article className={`metric ${highlight ? "highlight" : ""}`}>
-      <div className="metric-heading">
-        <span>
-          <span className="metric-index">
-            {String(index).padStart(2, "0")}
-          </span>
-          {title}
-        </span>
-        <span className={`metric-icon ${color}`}>
-          <Icon size={18} />
-        </span>
-      </div>
-      <strong>{value}</strong>
-      <small>
-        {highlight && <span className="dot" />}
-        {detail}
-      </small>
-    </article>
-  );
-}
-function PanelHeading({
-  title,
-  subtitle,
-  extra,
-}: {
-  title: string;
-  subtitle: string;
-  extra?: React.ReactNode;
-}) {
-  return (
-    <div className="panel-heading">
-      <div>
-        <h2>{title}</h2>
-        <p>{subtitle}</p>
-      </div>
-      {extra}
     </div>
   );
 }

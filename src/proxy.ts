@@ -26,7 +26,8 @@ export async function proxy(request: NextRequest) {
     },
   );
   const { data, error } = await client.auth.getClaims();
-  if (request.nextUrl.pathname === "/app" && (error || !data?.claims?.sub)) {
+  const privatePage = ["/app", "/admin"].includes(request.nextUrl.pathname);
+  if (privatePage && (error || !data?.claims?.sub)) {
     const redirect = NextResponse.redirect(new URL("/login", request.url));
     response.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie));
     redirect.headers.set("Cache-Control", "private, no-store");
@@ -35,4 +36,4 @@ export async function proxy(request: NextRequest) {
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }
-export const config = { matcher: ["/app", "/api/:path*", "/login"] };
+export const config = { matcher: ["/app", "/admin", "/api/:path*", "/login"] };

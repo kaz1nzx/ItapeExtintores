@@ -30,7 +30,7 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 - As tabelas, funções, índices e políticas de acesso já foram criados nesse projeto.
 - `.env.local` contém a URL e a chave **publishable**, sem chave secreta ou `service_role`. A chave publishable é um identificador de projeto; o acesso depende da sessão e das regras no banco.
 - Esse arquivo está ignorado pelo Git. Em outra instalação, copie `.env.example` para `.env.local` e preencha a URL e a chave publishable do painel Supabase.
-- Para uma nova empresa, crie uma conta de e-mail/senha em **Authentication → Users** no Supabase, entre com ela no site e preencha **Configurações → Sua empresa**. Nenhuma senha padrão foi criada.
+- Para uma nova empresa, crie uma conta de e-mail/senha em **Authentication → Users** no Supabase, entre com ela no site e preencha **Configurações → Sua empresa**. Nenhuma senha padrão foi criada. A mensalidade e o acesso de cada conta ficam em **Administração** (veja abaixo).
 - Cada conta vê somente sua própria empresa, produtos e registros. Não há compartilhamento entre logins nem várias empresas no mesmo login nesta versão. A conta `teste@gmail.com` foi vinculada à ItapeExtintores, com os dados disponíveis em seus orçamentos anteriores.
 - Não há cadastro público pela interface. Se não precisar de novos usuários, desative novos cadastros nas configurações de Auth do projeto.
 
@@ -47,6 +47,32 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
 8. Em **Configurações**, exporte uma cópia JSON dos registros quando necessário.
 
 Em **Validades**, clique em qualquer dia do calendário para salvar um lembrete, como “Orçamento para cliente X”, com observações opcionais. O calendário funciona mesmo sem validades cadastradas. Quando faltarem **menos de 30 dias**, aparecem uma notificação no site, um contador ao lado de Validades e um alerta junto do lembrete. Lembretes atrasados continuam avisando até clicar em **Concluir**. Na conta real, os lembretes ficam salvos no Supabase; na demonstração, são descartados ao recarregar.
+
+## Administração das contas (assinaturas)
+
+A página **/admin** é o painel do dono do sistema. Ela lista todas as contas cadastradas em Authentication, com mensalidade, vencimento, situação e uso, e permite suspender ou reativar o acesso de cada uma.
+
+**Configurar uma vez:**
+
+1. Execute `database/upgrade.sql` no SQL Editor do Supabase. Pode repetir; nenhuma conta é suspensa por ele.
+2. No mesmo SQL Editor, torne a sua conta administradora, trocando pelo seu e-mail:
+
+   ```sql
+   insert into itape_private.admins(user_id)
+   select id from auth.users where email = seu-email@exemplo.com
+   on conflict do nothing;
+   ```
+
+3. Entre no site com essa conta. O menu lateral passa a mostrar **Administração**.
+
+**No dia a dia:**
+
+- **Novo cliente:** crie o usuário (e-mail e senha) em Authentication → Users. Ele aparece em **Administração → Contas**, já ativo. Em **Editar assinatura**, informe a mensalidade e o vencimento.
+- **Pagamento recebido:** use **Registrar pagamento**. O vencimento avança um mês a partir do vencimento atual. Se a conta estiver suspensa, a mesma janela reativa o acesso.
+- **Cliente parou de pagar:** clique em **Suspender**. O bloqueio é imediato: ao abrir o sistema, o cliente vê a tela "Acesso suspenso", e o banco recusa leitura e gravação dessa conta, mesmo fora do site. Os dados ficam guardados, e **Reativar** devolve tudo como estava.
+- A suspensão é sempre manual. Contas em atraso aparecem em destaque (visão geral, contador no menu e filtro **Em atraso**), mas nenhuma é bloqueada sozinha.
+- A **Visão geral** mostra a receita mensal das contas ativas, as contas ativas, em atraso e suspensas, as operações por dia nos últimos 30 dias e as contas mais ativas. O painel mostra contagens de uso de cada cliente, nunca os valores financeiros das empresas.
+- Só quem está em `itape_private.admins` abre o painel; para as demais contas, a página volta ao sistema. Contas de administrador não podem ser suspensas.
 
 ## O que foi implementado
 
@@ -89,6 +115,7 @@ O saldo operacional assume pagamentos à vista: não representa saldo bancário,
 - Data de movimentação não pode anteceder a última movimentação daquele produto.
 - Histórico não tem edição ou exclusão pela interface. Estornos/devoluções ainda não fazem parte desta versão.
 - Cabeçalhos de proteção, ausência de HTML não escapado e tratamento de conteúdo potencialmente executável no CSV.
+- Suspensão de conta aplicada no banco: `itape_state`, `apply_command` e as políticas de leitura recusam a conta suspensa. Assinaturas e administradores ficam em esquema privado, alterados só por funções que conferem o administrador.
 - Dependências fixadas com arquivo de lock. Nenhuma chave administrativa é usada no app.
 
 O salvamento depende da conexão com o Supabase. A interface responde imediatamente e confirma somente após o retorno do banco. Se houver falha, mantém os campos e permite repetir a mesma solicitação sem duplicar o lançamento. Não há modo offline com sincronização posterior.
@@ -97,7 +124,7 @@ O salvamento depende da conexão com o Supabase. A interface responde imediatame
 
 `database/schema.sql` documenta a instalação em um banco novo. **Não execute novamente no projeto já configurado**: os objetos já existem. `database/hardening-existing-trigger.sql` registra a restrição aplicada à função preexistente de RLS automático.
 
-`database/upgrade.sql` é a atualização cumulativa do banco: remessas com vários produtos e o calendário de validades. **Execute no SQL Editor** do projeto já configurado (em um banco novo, depois do `schema.sql`). Pode ser executado mais de uma vez: cria só o que falta (a tabela `itape_validities`, com RLS de leitura pelo dono) e substitui `itape_state` e `itape_private.apply_command` pela versão atual, sem remover tabelas, políticas ou dados. Enquanto não for aplicado, o sistema segue funcionando como antes: a página **Validades** mostra o aviso de atualização, a venda não oferece o lembrete e remessas com vários produtos são recusadas com uma mensagem que indica este arquivo. `database/multi-item-batch.sql` foi incorporado a ele e hoje não faz nada.
+`database/upgrade.sql` é a atualização cumulativa do banco: remessas com vários produtos, o calendário de validades e o controle de assinaturas com o painel do administrador. **Execute no SQL Editor** do projeto já configurado (em um banco novo, depois do `schema.sql`). Pode ser executado mais de uma vez: cria só o que falta (a tabela `itape_validities`, com RLS de leitura pelo dono) e substitui `itape_state` e `itape_private.apply_command` pela versão atual, sem remover tabelas, políticas ou dados. Enquanto não for aplicado, o sistema segue funcionando como antes: a página **Validades** mostra o aviso de atualização, a venda não oferece o lembrete e remessas com vários produtos são recusadas com uma mensagem que indica este arquivo. `database/multi-item-batch.sql` foi incorporado a ele e hoje não faz nada.
 
 `database/verify.sql` roda os testes de integração com uma conta sintética e desfaz tudo ao final; depois do `upgrade.sql`, deve responder com `PASS`.
 
@@ -115,6 +142,7 @@ As verificações executadas estão em `VALIDACAO.md`.
 
 ```text
 src/app/                 Rotas Next.js, login e API
+src/app/admin/           Painel do administrador (contas e assinaturas)
 src/components/          Interface, formulários e gráfico
 src/lib/domain.ts        Regras compartilhadas e dados de demonstração
 src/lib/supabase.ts      Cliente Supabase no servidor

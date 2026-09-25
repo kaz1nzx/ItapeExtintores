@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useId, type ReactNode } from "react";
-import { X, FireExtinguisher, PackageOpen } from "lucide-react";
+import { X, FireExtinguisher, PackageOpen, type LucideIcon } from "lucide-react";
 export function Modal({
   title,
   subtitle,
@@ -87,6 +87,63 @@ export function Empty({
       <h3>{title}</h3>
       <p>{description}</p>
       {children}
+    </div>
+  );
+}
+export function Metric({
+  index,
+  title,
+  value,
+  detail,
+  icon: Icon,
+  color,
+  highlight = false,
+}: {
+  index: number;
+  title: string;
+  value: ReactNode;
+  detail: string;
+  icon: LucideIcon;
+  color: string;
+  highlight?: boolean;
+}) {
+  return (
+    <article className={`metric ${highlight ? "highlight" : ""}`}>
+      <div className="metric-heading">
+        <span>
+          <span className="metric-index">
+            {String(index).padStart(2, "0")}
+          </span>
+          {title}
+        </span>
+        <span className={`metric-icon ${color}`}>
+          <Icon size={18} />
+        </span>
+      </div>
+      <strong>{value}</strong>
+      <small>
+        {highlight && <span className="dot" />}
+        {detail}
+      </small>
+    </article>
+  );
+}
+export function PanelHeading({
+  title,
+  subtitle,
+  extra,
+}: {
+  title: string;
+  subtitle: string;
+  extra?: ReactNode;
+}) {
+  return (
+    <div className="panel-heading">
+      <div>
+        <h2>{title}</h2>
+        <p>{subtitle}</p>
+      </div>
+      {extra}
     </div>
   );
 }
