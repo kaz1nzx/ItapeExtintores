@@ -4529,3 +4529,36 @@ tr.is-suspended .product-name strong {
     padding: 12px 16px;
   }
 }
+
+/* ------------------------------------------------------- janela de dados */
+.period-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.content[aria-busy="true"] :is(.metrics, .overview-grid, .goal-panel, .finance-grid, .report, .table-scroll) {
+  opacity: 0.55;
+  transition: opacity 0.2s var(--ease);
+}
+.table-scroll[aria-busy="true"] {
+  opacity: 0.55;
+  transition: opacity 0.2s var(--ease);
+}
+.loading-line {
+  margin: 0;
+  padding: 36px 22px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--faint);
+}
+@media (prefers-reduced-motion: reduce) {
+  .content[aria-busy="true"] :is(.metrics, .overview-grid, .goal-panel, .finance-grid, .report, .table-scroll),
+  .table-scroll[aria-busy="true"] {
+    transition: none;
+  }
+}

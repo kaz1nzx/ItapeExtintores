@@ -5,6 +5,7 @@ import {
   ALERT_DAYS,
   VALIDITY_MONTHS,
   DEFAULT_PAYMENT_TERMS,
+  PHONE_PATTERN,
   addMonths,
   money,
   today,
@@ -46,7 +47,7 @@ const phoneField = (
     autoComplete="off"
     placeholder="(11) 99999-9999"
     maxLength={30}
-    pattern="[0-9+(). \-]*"
+    pattern={PHONE_PATTERN}
     title="Use números, espaços, parênteses, ponto, + e -"
   />
 );

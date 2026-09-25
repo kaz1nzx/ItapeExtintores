@@ -52,9 +52,10 @@ export type Validity = {
   startDate: string;
   dueDate: string;
   status: "pending" | "renewed" | "dismissed";
-  movementId: string | null;
-  resolvedAt: string | null;
-  createdAt: string;
+  // Ausentes nas pendentes da janela de dados (itape_snapshot): a tela não usa.
+  movementId?: string | null;
+  resolvedAt?: string | null;
+  createdAt?: string;
 };
 export type Reminder = {
   id: string;
@@ -70,8 +71,20 @@ export type Settings = {
   goals?: Record<string, number>;
   rechargePrice?: number;
 };
+// Totais da conta inteira, para o que a janela de dados não alcança.
+export type StoreCounts = {
+  sales: number;
+  purchases: number;
+  quotations: number;
+  firstDate: string | null;
+};
 export type Store = {
   version: number;
+  // Com `since`, movimentações e despesas vêm só desta data em diante (mês
+  // atual e anterior), as validades só pendentes e os orçamentos sob demanda.
+  // Sem `since` (demonstração ou banco sem a atualização), está tudo aqui.
+  since?: string | null;
+  counts?: StoreCounts;
   company: Company | null;
   settings: Settings;
   products: Product[];
@@ -200,6 +213,10 @@ const phone = z
   .trim()
   .max(30)
   .regex(/^[0-9+(). -]*$/, "Informe um telefone válido.");
+// Mesma regra para o atributo `pattern` do campo. O navegador compila o
+// pattern com a flag `v`, que exige escapar parênteses dentro de colchetes:
+// sem o escape a regra é inválida e o navegador simplesmente a ignora.
+export const PHONE_PATTERN = String.raw`[0-9+\(\). \-]*`;
 const quotationFields = z.object({
   paymentTerms: z.string().trim().min(1).max(240),
   notes: z.string().trim().max(1000),
@@ -303,7 +320,14 @@ export function applyCommand(
   id: string,
   createdAt = new Date().toISOString(),
 ): Store {
-  const cmd = commandSchema.parse(input);
+  const parsed = commandSchema.safeParse(input);
+  if (!parsed.success) {
+    // As mensagens próprias ("Informe um telefone válido.") vão para a tela;
+    // o detalhe técnico do validador, em inglês, não.
+    const own = parsed.error.issues.map((i) => i.message).find((m) => m.startsWith("Informe"));
+    throw new Error(own ?? "Confira os campos: preencha com valores válidos, sem deixar nenhum só com espaços.");
+  }
+  const cmd = parsed.data;
   const selling =
     cmd.kind === "sale" || (cmd.kind === "batch" && cmd.operation === "sale");
   if (actor.role !== "admin" && !selling)
@@ -492,6 +516,18 @@ function registerMovement(
       resolvedAt: null,
       createdAt,
     });
+}
+// Junta registros de um período antigo com os da janela recente, sem repetir.
+// Na dúvida vale a versão mais nova (`newer`).
+export function mergeRecords<T extends { id: string; date: string; createdAt?: string }>(
+  older: T[],
+  newer: T[],
+): T[] {
+  const byId = new Map(older.map((r) => [r.id, r]));
+  for (const r of newer) byId.set(r.id, r);
+  return [...byId.values()].sort(
+    (a, b) => a.date.localeCompare(b.date) || (a.createdAt ?? "").localeCompare(b.createdAt ?? ""),
+  );
 }
 export function summarize(store: Store, from: string, to: string) {
   const movements = store.movements.filter(

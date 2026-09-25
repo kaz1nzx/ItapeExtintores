@@ -66,3 +66,33 @@ test("CSP: script só com nonce, sem inline nem eval em produção", () => {
   assert.match(dev, /'unsafe-eval'/);
   assert.doesNotMatch(dev, /upgrade-insecure-requests/);
 });
+
+test("telefone: a regra do campo é válida no navegador e igual à do servidor", async () => {
+  const { PHONE_PATTERN, commandSchema } = await import("../src/lib/domain");
+  // O navegador compila o atributo pattern com a flag v; regra inválida é ignorada.
+  const field = new RegExp(`^(?:${PHONE_PATTERN})$`, "v");
+  const server = (phone: string) =>
+    commandSchema.safeParse({ kind: "validity", client: "C", phone, item: "I", quantity: 1, startDate: "2026-01-10" }).success;
+  for (const phone of ["(11) 98765-4321", "+55 11 3333.4444", "", "11987654321", "ligar amanhã", "11#999", "abc"])
+    assert.equal(field.test(phone), server(phone), phone);
+});
+
+test("formulário inválido mostra mensagem em português, não o detalhe do validador", async () => {
+  const { applyCommand, emptyStore } = await import("../src/lib/domain");
+  const user = { id: "u", name: "Adm", role: "admin" as const };
+  const expense = { kind: "expense", description: "   ", amount: 100, date: "2026-01-10" };
+  assert.throws(() => applyCommand(emptyStore(), expense, user, "x"), (e: Error) =>
+    e.message.startsWith("Confira os campos") && !e.message.includes("{"));
+  const validity = { kind: "validity", client: "C", phone: "ligar amanhã", item: "I", quantity: 1, startDate: "2026-01-10" };
+  assert.throws(() => applyCommand(emptyStore(), validity, user, "y"), /^Error: Informe um telefone válido\.$/);
+});
+
+test("erro de rede ou resposta que não é JSON vira aviso claro", async () => {
+  const { problem } = await import("../src/components/primitives");
+  const offline = "Sem resposta do servidor. Verifique a conexão e tente novamente.";
+  assert.equal(problem(new TypeError("Failed to fetch")), offline);
+  assert.equal(problem(new SyntaxError("Unexpected token '<'")), offline);
+  assert.equal(problem(Object.assign(new Error("signal timed out"), { name: "TimeoutError" })), offline);
+  assert.equal(problem(new Error("")), offline);
+  assert.equal(problem(new Error("Estoque insuficiente.")), "Estoque insuficiente.");
+});

@@ -4,6 +4,7 @@ import {
   applyCommand,
   commandSchema,
   emptyStore,
+  mergeRecords,
   withDefaults,
   type Store,
   type User,
@@ -13,6 +14,8 @@ import {
   formatPercent,
   goalFor,
   goalProgress,
+  monthChunks,
+  neededRange,
   previousPeriod,
   rechargeForecast,
   trend,
@@ -141,4 +144,54 @@ test("WhatsApp de suporte: DDD ganha +55 e número inválido desliga o botão", 
   assert.equal(supportNumber(""), null);
   assert.equal(supportNumber(undefined), null);
   assert.equal(supportNumber("12345"), null);
+});
+
+test("janela de dados: período necessário inclui comparação e mês da meta", () => {
+  // Mês em andamento: ele e o mês anterior.
+  const month = previousPeriod("month", "2026-09-01", "2026-09-24");
+  assert.deepEqual(neededRange("2026-09-01", "2026-09-24", month.from, "2026-09", "2026-09-24"), {
+    from: "2026-08-01",
+    to: "2026-09-24",
+  });
+  // Semana que cruza o mês: a meta de setembro precisa do mês inteiro.
+  const week = previousPeriod("week", "2026-08-28", "2026-09-03");
+  assert.deepEqual(neededRange("2026-08-28", "2026-09-03", week.from, "2026-09", "2026-09-24"), {
+    from: "2026-08-21",
+    to: "2026-09-24",
+  });
+  // Semana antiga: vai até o fim daquele mês, não até hoje.
+  const old = previousPeriod("week", "2025-03-04", "2025-03-10");
+  assert.deepEqual(neededRange("2025-03-04", "2025-03-10", old.from, "2025-03", "2026-09-24"), {
+    from: "2025-02-25",
+    to: "2025-03-31",
+  });
+});
+
+test("janela de dados: registros antigos e recentes se juntam sem repetir", () => {
+  const row = (id: string, date: string, createdAt: string, amount = 1) => ({ id, date, createdAt, amount });
+  const merged = mergeRecords(
+    [row("a", "2026-06-02", "2"), row("b", "2026-06-01", "1"), row("c", "2026-08-01", "3", 1)],
+    [row("c", "2026-08-01", "3", 9), row("d", "2026-08-01", "0")],
+  );
+  assert.deepEqual(merged.map((r) => r.id), ["b", "a", "d", "c"]);
+  // A cópia da janela (mais nova) prevalece.
+  assert.equal(merged.find((r) => r.id === "c")!.amount, 9);
+});
+
+test("exportação: um pedido por mês, do primeiro registro até hoje", () => {
+  assert.deepEqual(monthChunks("2025-11-17", "2026-02-03"), [
+    { from: "2025-11-01", to: "2025-11-30" },
+    { from: "2025-12-01", to: "2025-12-31" },
+    { from: "2026-01-01", to: "2026-01-31" },
+    { from: "2026-02-01", to: "2026-02-28" },
+  ]);
+  assert.deepEqual(monthChunks("2026-09-24", "2026-09-24"), [{ from: "2026-09-01", to: "2026-09-30" }]);
+  assert.deepEqual(monthChunks("2026-10-01", "2026-09-24"), []);
+});
+
+test("janela de dados: primeiros passos usam os totais da conta", () => {
+  const store = withDefaults({ ...emptyStore(), since: "2026-08-01", counts: { sales: 3, purchases: 1, quotations: 3, firstDate: "2025-01-10" } });
+  assert.equal(store.since, "2026-08-01");
+  assert.equal(store.counts?.sales, 3);
+  assert.equal(store.movements.length, 0);
 });

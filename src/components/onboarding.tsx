@@ -53,14 +53,15 @@ export default function Onboarding({
       id: "purchase",
       title: "Registre uma entrada de estoque",
       text: "As unidades compradas e o custo de cada uma.",
-      done: store.movements.some((m) => m.kind === "purchase"),
+      // A janela de dados só traz os meses recentes; o total vem de counts.
+      done: (store.counts?.purchases ?? 0) > 0 || store.movements.some((m) => m.kind === "purchase"),
       blocked: hasProduct ? undefined : "Cadastre um produto antes",
     },
     {
       id: "sale",
       title: "Registre a primeira venda",
       text: "O orçamento em PDF e a validade saem juntos.",
-      done: store.movements.some((m) => m.kind === "sale"),
+      done: (store.counts?.sales ?? 0) > 0 || store.movements.some((m) => m.kind === "sale"),
       blocked: hasStock ? undefined : "Registre uma entrada de estoque antes",
     },
     {

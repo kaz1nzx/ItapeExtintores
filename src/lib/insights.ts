@@ -38,6 +38,35 @@ export function previousPeriod(
   };
 }
 
+// Datas de que a tela precisa: o período escolhido, o de comparação e o mês da
+// meta, que na visão semanal pode começar antes e terminar depois da semana.
+export function neededRange(
+  from: string,
+  to: string,
+  previousFrom: string,
+  goalMonth: string,
+  today: string,
+) {
+  const goalEnd = [`${goalMonth}-${pad(lastDay(goalMonth))}`, today].sort()[0];
+  return {
+    from: [from, previousFrom, `${goalMonth}-01`].sort()[0],
+    to: [to, goalEnd].sort()[1],
+  };
+}
+
+// Meses de `first` até `last`: a exportação completa busca um mês por vez,
+// para cada resposta ficar pequena.
+export function monthChunks(first: string, last: string) {
+  const chunks: { from: string; to: string }[] = [];
+  for (
+    let month = first.slice(0, 7);
+    month <= last.slice(0, 7);
+    month = addMonths(`${month}-01`, 1).slice(0, 7)
+  )
+    chunks.push({ from: `${month}-01`, to: `${month}-${pad(lastDay(month))}` });
+  return chunks;
+}
+
 export type Trend = {
   direction: "up" | "down" | "flat";
   // null quando o período anterior não tem base para porcentagem.

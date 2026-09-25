@@ -191,5 +191,90 @@ begin
   execute 'reset role';
 end;
 $$;
-select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, multi-item batch, validity scheduling, renewal, dismissal, owner isolation, anonymous denial, subscription suspension, admin-only management, payment retry, own subscription notice, sales goals, recharge price, activation required, admin audit log' as verification;
+-- Data window: recent months in the snapshot, older periods and quotations on demand.
+do $$
+declare
+  s jsonb;
+  h jsonb;
+  qs jsonb;
+  v integer;
+  p uuid := gen_random_uuid();
+  old_sale uuid := gen_random_uuid();
+  new_sale uuid := gen_random_uuid();
+  local_today date := (now() at time zone 'America/Sao_Paulo')::date;
+  window_start date := (date_trunc('month', (now() at time zone 'America/Sao_Paulo')::date) - interval '1 month')::date;
+  old date;
+  sale_cmd jsonb;
+  needle text;
+  blocked boolean;
+begin
+  old := window_start - 40;
+  execute 'set local role authenticated';
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', current_setting('itape.test_uid'), 'role', 'authenticated', 'email', 'fixture@example.invalid')::text, true);
+  v := (public.itape_snapshot()->>'version')::int;
+  perform public.itape_command(jsonb_build_object('kind','product','name','Window extinguisher','sku','WINDOW-001','type','CO₂','capacity','6 kg','cost',9000,'price',15000,'tax',10,'minimum',1), p, v);
+  perform public.itape_command(jsonb_build_object('kind','purchase','productId',p,'quantity',10,'unitPrice',9000,'date',old,'party','Window supplier'), gen_random_uuid(), v + 1);
+  perform public.itape_command(jsonb_build_object('kind','sale','productId',p,'quantity',2,'unitPrice',15000,'date',old + 1,'party','Cliente Antigo Janela'), old_sale, v + 2);
+  perform public.itape_command(jsonb_build_object('kind','expense','description','Window rent','amount',50000,'date',old), gen_random_uuid(), v + 3);
+  sale_cmd := jsonb_build_object('kind','sale','productId',p,'quantity',1,'unitPrice',15000,'date',local_today,'party','Cliente Novo Janela');
+  s := public.itape_apply(sale_cmd, new_sale, v + 4);
+  if s->>'since' <> window_start::text then raise exception 'Test failed: window start'; end if;
+  if exists(select 1 from jsonb_array_elements(s->'movements') m where (m->>'date')::date < window_start) then raise exception 'Test failed: window leaked older movements'; end if;
+  if exists(select 1 from jsonb_array_elements(s->'expenses') e where (e->>'date')::date < window_start) then raise exception 'Test failed: window leaked older expenses'; end if;
+  if not exists(select 1 from jsonb_array_elements(s->'movements') m where m->>'id' = new_sale::text) then raise exception 'Test failed: window missing new sale'; end if;
+  if s ? 'quotations' or s->'quotation'->>'id' <> new_sale::text or s->'quotation'->>'client' <> 'Cliente Novo Janela' then raise exception 'Test failed: apply returns only the new quotation'; end if;
+  if exists(select 1 from jsonb_array_elements(s->'validities') x where x->>'status' <> 'pending' or x ? 'createdAt') then raise exception 'Test failed: window validities are pending and slim'; end if;
+  if not exists(select 1 from jsonb_array_elements(s->'validities') x where x->>'client' = 'Cliente Antigo Janela') then raise exception 'Test failed: pending validity from an older sale'; end if;
+  if (s->'counts'->>'sales')::int <> (select count(*) from public.itape_movements where kind = 'sale')
+    or (s->'counts'->>'purchases')::int <> (select count(*) from public.itape_movements where kind = 'purchase')
+    or (s->'counts'->>'quotations')::int <> (select count(*) from public.itape_quotations)
+    or (s->'counts'->>'firstDate')::date > old then raise exception 'Test failed: account counts'; end if;
+  if jsonb_array_length(public.itape_state()->'movements') <= jsonb_array_length(s->'movements') then raise exception 'Test failed: itape_state keeps the full history'; end if;
+  -- Retrying the same request returns the same quotation without a new sale.
+  s := public.itape_apply(sale_cmd, new_sale, v + 4);
+  if s->'quotation'->>'id' <> new_sale::text or (select count(*) from public.itape_movements where quotation_id = new_sale) <> 1 then raise exception 'Test failed: apply retry'; end if;
+  h := public.itape_history(old, window_start - 1, false);
+  if jsonb_array_length(h->'movements') <> 2 or jsonb_array_length(h->'expenses') <> 1 or h ? 'quotations' then raise exception 'Test failed: history period'; end if;
+  h := public.itape_history(old, window_start - 1, true);
+  if not exists(select 1 from jsonb_array_elements(h->'quotations') q where q->>'id' = old_sale::text)
+    or not exists(select 1 from jsonb_array_elements(h->'validities') x where x->>'client' = 'Cliente Antigo Janela' and x ? 'createdAt')
+    then raise exception 'Test failed: full export period'; end if;
+  blocked := false;
+  begin perform public.itape_history(local_today, local_today - 1, false); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: inverted period accepted'; end if;
+  blocked := false;
+  begin perform public.itape_history(local_today - 500, local_today, false); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: oversized period accepted'; end if;
+  qs := public.itape_quotations('  cliente ANTIGO ', 0);
+  if (qs->>'total')::int <> 1 or qs->'items'->0->>'id' <> old_sale::text then raise exception 'Test failed: quotation search by client'; end if;
+  select lpad(number::text, 4, '0') || '/' || year into needle from public.itape_quotations where id = old_sale;
+  qs := public.itape_quotations(needle, 0);
+  if not exists(select 1 from jsonb_array_elements(qs->'items') q where q->>'id' = old_sale::text) then raise exception 'Test failed: quotation search by number'; end if;
+  qs := public.itape_quotations('', 0);
+  if (qs->>'total')::int <> (select count(*) from public.itape_quotations) or jsonb_array_length(qs->'items') <> least(10, (qs->>'total')::int)
+    or (qs->'items'->0->>'date')::date <> (select max(date) from public.itape_quotations) then raise exception 'Test failed: quotation list'; end if;
+  if jsonb_array_length(public.itape_quotations('', 99999)->'items') <> 0 then raise exception 'Test failed: quotation page past the end'; end if;
+  blocked := false;
+  begin perform public.itape_quotations(repeat('x', 121), 0); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: oversized search accepted'; end if;
+  -- Accounts without access read nothing through the new functions.
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', gen_random_uuid(), 'role', 'authenticated')::text, true);
+  blocked := false;
+  begin perform public.itape_snapshot(); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: snapshot without access'; end if;
+  blocked := false;
+  begin perform public.itape_history(old, local_today, false); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: history without access'; end if;
+  blocked := false;
+  begin perform public.itape_quotations('', 0); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: quotations without access'; end if;
+  execute 'reset role';
+  execute 'set local role anon';
+  blocked := false;
+  begin perform public.itape_snapshot(); exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'Test failed: anonymous snapshot'; end if;
+  execute 'reset role';
+end;
+$$;
+select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, multi-item batch, validity scheduling, renewal, dismissal, owner isolation, anonymous denial, subscription suspension, admin-only management, payment retry, own subscription notice, sales goals, recharge price, activation required, admin audit log, data window, history periods, quotation search' as verification;
 rollback;

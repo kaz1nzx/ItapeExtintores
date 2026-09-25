@@ -35,7 +35,11 @@ export default async function Page() {
         status={access.status === "pending" ? "pending" : "suspended"}
       />
     );
-  const { data, error } = await client.rpc("itape_state");
+  // Janela de dados (mês atual e anterior); sem a atualização do banco, o
+  // estado completo, como antes.
+  let { data, error } = await client.rpc("itape_snapshot");
+  if (error && missingFunction(error))
+    ({ data, error } = await client.rpc("itape_state"));
   if (error) return unavailable;
   return (
     <Workspace

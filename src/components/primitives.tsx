@@ -197,6 +197,18 @@ export function PanelHeading({
     </div>
   );
 }
+// Mensagem de erro para a tela. As do servidor já vêm em português; queda de
+// rede, tempo esgotado ou uma página de erro no lugar dos dados geram erros
+// técnicos do navegador, em inglês, que viram um aviso claro.
+export const problem = (e: unknown) =>
+  e instanceof Error &&
+  e.message &&
+  e.name !== "TimeoutError" &&
+  e.name !== "AbortError" &&
+  !(e instanceof TypeError) &&
+  !(e instanceof SyntaxError)
+    ? e.message
+    : "Sem resposta do servidor. Verifique a conexão e tente novamente.";
 export function download(name: string, content: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement("a");
@@ -204,11 +216,4 @@ export function download(name: string, content: string, type: string) {
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-export function csvCell(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value))
-    return `"${String(value).replace(".", ",")}"`;
-  let v = String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
-  return `"${v.replaceAll('"', '""')}"`;
 }

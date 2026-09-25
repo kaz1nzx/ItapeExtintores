@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import EmberField from "@/components/ember-field";
 import { Magnetic } from "@/components/motion";
+import { problem } from "@/components/primitives";
 
 // Índice de sequência das animações de entrada, lido pelo CSS.
 const step = (i: number) => ({ "--i": i }) as CSSProperties;
@@ -48,9 +49,7 @@ export default function Login() {
       if (!res.ok) throw new Error(result.error);
       window.location.assign("/app");
     } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Falha na conexão. Tente novamente.",
-      );
+      setError(problem(e));
       setBusy(false);
     }
   }

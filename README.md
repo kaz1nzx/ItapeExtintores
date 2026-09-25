@@ -1,5 +1,4 @@
 
-<<<<<<< HEAD
 ExtinPro é um sistema de estoque e financeiro construído em Next.js App Router, React, TypeScript e Supabase. O ZIP original serviu de referência funcional; a estrutura Vite foi substituída por Next.js e a interface foi redesenhada.
 
 Orçamentos fica no fim do menu principal, após Relatórios. Cada conta possui uma empresa, cadastrada em **Configurações → Sua empresa**, com nome, complemento da razão social, CNPJ, endereço, cidade/UF/CEP, e-mail, responsável e telefone. O painel identifica a empresa conectada, e os novos orçamentos preservam uma cópia do cadastro na emissão. Editar o cadastro não modifica documentos antigos. Contas novas começam sem empresa predefinida.
@@ -43,7 +42,7 @@ Em uso local, `localhost`, `127.0.0.1` e `[::1]` são aceitos como origens equiv
    Preencha também as condições de pagamento e, se necessário, as observações. Ao clicar em **Salvar venda e gerar PDF**, o sistema baixa um orçamento numerado com os dados da empresa, cliente, data, todos os produtos, quantidades, valores unitários, subtotais e total e abre a aba **Orçamentos** no menu esquerdo. Nela ficam reunidos os orçamentos de todos os períodos, com busca por cliente ou número e botão **Baixar PDF**. O orçamento preserva os dados da venda mesmo que o cadastro do produto seja alterado depois. Se o download falhar, tente novamente pela aba Orçamentos, sem registrar outra venda.
 5. Em **Validades**, acompanhe quem precisa de contato: o cliente aparece 30 dias antes do vencimento, com **Avisar** (abre o WhatsApp com a mensagem pronta), **Renovar** (registra a recarga e abre o próximo ciclo de 12 meses) e dispensa. Recargas feitas fora do sistema entram por **Registrar validade**.
 6. Lance aluguel, transporte e outros gastos em **Financeiro → Nova despesa**. Não lance a compra de extintores novamente como despesa.
-7. Em **Relatórios**, selecione semana ou mês; baixe CSV ou use **Imprimir / PDF**. Para gerar PDF, escolha “Salvar como PDF” na janela de impressão.
+7. Em **Relatórios**, selecione semana ou mês e use **Imprimir / PDF**. Para gerar PDF, escolha “Salvar como PDF” na janela de impressão.
 8. Em **Configurações**, exporte uma cópia JSON dos registros quando necessário.
 
 Em **Validades**, clique em qualquer dia do calendário para salvar um lembrete, como “Orçamento para cliente X”, com observações opcionais. O calendário funciona mesmo sem validades cadastradas. Quando faltarem **menos de 30 dias**, aparecem uma notificação no site, um contador ao lado de Validades e um alerta junto do lembrete. Lembretes atrasados continuam avisando até clicar em **Concluir**. Na conta real, os lembretes ficam salvos no Supabase; na demonstração, são descartados ao recarregar.
@@ -95,7 +94,7 @@ A página **/admin** é o painel do dono do sistema. Ela lista todas as contas c
 - Valores de custo, preço e alíquota preservados em cada venda.
 - Despesas operacionais, composição do resultado e saldo operacional estimado.
 - Relatórios semanais (sete dias terminando na data escolhida) e mensais (mês calendário, até hoje no mês atual).
-- CSV com resumo, vendas, compras e despesas; impressão/PDF e exportação JSON.
+- Relatórios para imprimir ou salvar em PDF, e exportação de todos os dados em JSON.
 - Layout responsivo, navegação sem recarga, feedback imediato, animações discretas e respeito à preferência de movimento reduzido.
 - Formulários com validação, foco contido em diálogo nativo, suporte a Escape e mensagens de erro.
 
@@ -123,11 +122,12 @@ O saldo operacional assume pagamentos à vista: não representa saldo bancário,
 - Estoque negativo e edição manual do custo com saldo existente são bloqueados.
 - Data de movimentação não pode anteceder a última movimentação daquele produto.
 - Histórico não tem edição ou exclusão pela interface. Estornos/devoluções ainda não fazem parte desta versão.
-- Cabeçalhos de proteção, ausência de HTML não escapado e tratamento de conteúdo potencialmente executável no CSV.
+- Cabeçalhos de proteção e ausência de HTML não escapado.
 - Suspensão de conta aplicada no banco: `itape_state`, `apply_command` e as políticas de leitura recusam a conta suspensa. Assinaturas e administradores ficam em esquema privado, alterados só por funções que conferem o administrador.
 - Conta nova sem acesso até o administrador ativar; toda ação do administrador fica registrada em `itape_private.admin_events`.
 - Limite de tentativas de login: 8 senhas erradas por e-mail e 40 por IP a cada 15 minutos, barradas antes de chegar ao Supabase. O limite por IP usa o `X-Forwarded-For` da hospedagem; sem proxy na frente, vale só o limite por e-mail. Os contadores ficam na memória do servidor (um processo).
 - Corpo das requisições lido com limite de tamanho, mesmo sem `Content-Length`.
+- Janela de dados: ao abrir e a cada registro salvo, a tela recebe só o mês atual e o anterior (movimentações e despesas), as validades e lembretes pendentes e os totais da conta (`itape_snapshot`). Meses anteriores (`itape_history`), a lista de orçamentos (`itape_quotations`, 10 por página) e a exportação (mês a mês) vêm só quando a tela pede. Assim as respostas não crescem com o histórico e ficam abaixo do limite de 4,5 MB da Vercel. As validades pendentes (até um ano de vendas) são a maior parte: cerca de 1,8 MB para uma loja com 15 vendas por dia.
 - Content-Security-Policy com nonce por requisição: só roda script com o nonce da página, sem `unsafe-inline` nem `eval` em produção. Por isso todas as páginas são geradas por requisição. Estilos inline seguem permitidos.
 - `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy` e, com `APP_ORIGIN` em HTTPS, `Strict-Transport-Security`.
 
@@ -183,5 +183,3 @@ Para uma loja pequena, os registros da conta são carregados de uma só vez, per
 - [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Funções transacionais no banco](https://supabase.com/docs/guides/database/functions)
 - [Segurança de dados no Next.js](https://nextjs.org/docs/app/guides/data-security)
-=======
->>>>>>> 52a08585c2fbebd82300a71efc4a08f83c945f3e

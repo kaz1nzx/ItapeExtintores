@@ -39,12 +39,15 @@ import {
 import {
   applyCommand,
   type Command,
+  type Expense,
+  type Movement,
   type Product,
   type Store,
   type User,
   type Validity,
   type Quotation,
   ALERT_DAYS,
+  mergeRecords,
   money,
   summarize,
   today,
@@ -55,14 +58,14 @@ import {
 } from "@/lib/domain";
 import OperationForm, { type FormMode } from "./operation-form";
 import CompanyForm from "./company-form";
-import { Empty, Extinguisher, Metric, PanelHeading, TrendLine, download } from "./primitives";
+import { Empty, Extinguisher, Metric, PanelHeading, TrendLine, download, problem } from "./primitives";
 import { CountUp, Reveal } from "./motion";
 import Chart from "./chart";
 import ValidityPage, {
   ValidityStrip,
   ValidityUpgradeNotice,
 } from "./validity";
-import { goalFor, monthName, previousPeriod } from "@/lib/insights";
+import { goalFor, monthChunks, monthName, neededRange, previousPeriod } from "@/lib/insights";
 import GoalPanel from "./goal";
 import RechargeForecast from "./forecast";
 import Onboarding, { type Step } from "./onboarding";
@@ -177,14 +180,68 @@ export default function Workspace({
         ].sort()[0];
   const from =
     period === "week" ? daysBefore(anchor, 6) : `${anchor.slice(0, 7)}-01`;
-  const stats = useMemo(() => summarize(store, from, to), [store, from, to]);
   const previous = previousPeriod(period, from, to);
-  const before = useMemo(
-    () => summarize(store, previous.from, previous.to),
-    [store, previous.from, previous.to],
-  );
   // A meta é mensal: vale o mês da data escolhida, também na visão semanal.
   const goalMonth = anchor.slice(0, 7);
+  // Janela de dados: o store traz o mês atual e o anterior. Um período mais
+  // antigo vem de /api/store?from=&to= e se junta à janela em `view`.
+  const need = neededRange(from, to, previous.from, goalMonth, calendarToday);
+  const windowed = !demo && !!store.since;
+  const inWindow = !windowed || need.from >= store.since!;
+  const [history, setHistory] = useState<{
+    from: string;
+    to: string;
+    movements: Movement[];
+    expenses: Expense[];
+  } | null>(null);
+  const [failedRange, setFailedRange] = useState<string | null>(null);
+  const historyReady =
+    !!history && history.from <= need.from && history.to >= need.to;
+  const loadingPeriod = !inWindow && !historyReady;
+  const view = useMemo(
+    () =>
+      inWindow || !history
+        ? store
+        : {
+            ...store,
+            movements: mergeRecords(history.movements, store.movements),
+            expenses: mergeRecords(history.expenses, store.expenses),
+          },
+    [store, history, inWindow],
+  );
+  useEffect(() => {
+    const range = `${need.from}:${need.to}`;
+    if (!loadingPeriod || failedRange === range) return;
+    const controller = new AbortController();
+    fetch(`/api/store?from=${need.from}&to=${need.to}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          if (data.suspended) window.location.assign("/app");
+          throw new Error(data.error);
+        }
+        setHistory({
+          from: need.from,
+          to: need.to,
+          movements: data.movements,
+          expenses: data.expenses,
+        });
+      })
+      .catch((e) => {
+        if (controller.signal.aborted) return;
+        setFailedRange(range);
+        setNotice({ error: true, message: `${problem(e)} Use Atualizar para carregar o período.` });
+      });
+    return () => controller.abort();
+  }, [loadingPeriod, failedRange, need.from, need.to]);
+  const stats = useMemo(() => summarize(view, from, to), [view, from, to]);
+  const before = useMemo(
+    () => summarize(view, previous.from, previous.to),
+    [view, previous.from, previous.to],
+  );
   const [amountDialog, setAmountDialog] = useState<"goal" | "recharge" | null>(null);
   const products = store.products.filter((p) => p.active);
   const low = products.filter((p) => p.stock <= p.minimum);
@@ -198,6 +255,49 @@ export default function Workspace({
   const quotations = store.quotations
     .filter((q) => `${q.client} ${String(q.number).padStart(4, "0")}/${q.date.slice(0, 4)}`.toLocaleLowerCase("pt-BR").includes(quotationNeedle))
     .sort((a, b) => b.date.localeCompare(a.date) || b.number - a.number);
+  // Com a janela de dados, os orçamentos de todos os períodos vêm do banco, 10
+  // por página. Enquanto a próxima página chega, a anterior continua na tela.
+  const [remoteQuotations, setRemoteQuotations] = useState<{
+    key: string;
+    total: number;
+    items: Quotation[];
+  } | null>(null);
+  const quotationKey = `${quotationNeedle}|${tablePage}|${store.version}`;
+  useEffect(() => {
+    if (!windowed || page !== "quotations") return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetch(
+        `/api/store?quotations=1&q=${encodeURIComponent(quotationNeedle)}&page=${tablePage}`,
+        { cache: "no-store", signal: controller.signal },
+      )
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) {
+            if (data.suspended) window.location.assign("/app");
+            throw new Error(data.error);
+          }
+          setRemoteQuotations({ key: quotationKey, total: data.total, items: data.items });
+        })
+        .catch((e) => {
+          if (controller.signal.aborted) return;
+          setNotice({ error: true, message: problem(e) });
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [windowed, page, quotationNeedle, tablePage, quotationKey]);
+  const quotationsLoading =
+    windowed && remoteQuotations?.key !== quotationKey;
+  const quotationRows = windowed
+    ? (remoteQuotations?.items ?? [])
+    : quotations.slice(tablePage * 10, tablePage * 10 + 10);
+  const quotationTotal = windowed
+    ? (remoteQuotations?.total ?? 0)
+    : quotations.length;
+  const quotationCount = store.counts?.quotations ?? store.quotations.length;
   const stockUnits = products.reduce((a, p) => a + p.stock, 0);
   const stockValue = products.reduce((a, p) => a + p.stock * p.cost, 0);
   const filteredProducts = products.filter(
@@ -208,7 +308,7 @@ export default function Workspace({
       (filter === "all" ||
         (filter === "low" ? p.stock <= p.minimum : p.type === filter)),
   );
-  const movements = [...store.movements]
+  const movements = [...view.movements]
     .filter(
       (m) =>
         m.date >= from &&
@@ -255,6 +355,9 @@ export default function Workspace({
     let recovery: Store | undefined;
     const optimistic = applyCommand(before, command, user, requestId);
     let confirmed = optimistic;
+    // itape_apply devolve o orçamento desta venda à parte: a janela de dados
+    // não traz a lista de orçamentos.
+    let created: Quotation | null = null;
     busy.current = true;
     setSaving(true);
     setStore(optimistic);
@@ -278,6 +381,10 @@ export default function Workspace({
         }
         receive(result);
         confirmed = withDefaults(result);
+        created = result.quotation ?? null;
+        // Uma venda com data antiga muda o período antigo carregado.
+        setHistory(null);
+        setFailedRange(null);
         setSynced(
           new Date().toLocaleTimeString("pt-BR", {
             hour: "2-digit",
@@ -311,7 +418,7 @@ export default function Workspace({
       setSaving(false);
     }
     if (command.kind === "sale" || (command.kind === "batch" && command.operation === "sale")) {
-      const quotation = confirmed.quotations.find((q) => q.id === requestId);
+      const quotation = created ?? confirmed.quotations.find((q) => q.id === requestId);
       if (quotation) {
         setLastQuotation(quotation);
         go("quotations");
@@ -335,6 +442,9 @@ export default function Workspace({
         throw new Error(data.error);
       }
       receive(data);
+      setHistory(null);
+      setFailedRange(null);
+      setRemoteQuotations(null);
       setSynced(
         new Date().toLocaleTimeString("pt-BR", {
           hour: "2-digit",
@@ -343,13 +453,66 @@ export default function Workspace({
       );
       setNotice({ message: "Dados atualizados." });
     } catch (e) {
-      setNotice({
-        message: e instanceof Error ? e.message : "Não foi possível atualizar.",
-        error: true,
-      });
+      setNotice({ message: problem(e), error: true });
     } finally {
       setRefreshing(false);
     }
+  }
+  const [exporting, setExporting] = useState<string | null>(null);
+  // Cópia de tudo. Com a janela de dados, o histórico vem mês a mês (três por
+  // vez), para nenhuma resposta passar do limite da hospedagem.
+  async function exportData() {
+    if (exporting) return;
+    let data: Store = store;
+    if (windowed) {
+      const first = store.counts?.firstDate;
+      const chunks = first ? monthChunks(first, calendarToday) : [];
+      const parts: Partial<Pick<Store, "movements" | "expenses" | "quotations" | "validities" | "reminders">>[] = [];
+      setExporting(`0/${chunks.length}`);
+      try {
+        for (let i = 0; i < chunks.length; i += 3) {
+          const batch = await Promise.all(
+            chunks.slice(i, i + 3).map(async ({ from, to }) => {
+              const res = await fetch(`/api/store?from=${from}&to=${to}&full=1`, {
+                cache: "no-store",
+                signal: AbortSignal.timeout(30000),
+              });
+              const body = await res.json();
+              if (!res.ok) throw new Error(body.error);
+              return body;
+            }),
+          );
+          parts.push(...batch);
+          setExporting(`${parts.length}/${chunks.length}`);
+        }
+      } catch (e) {
+        setExporting(null);
+        setNotice({ error: true, message: problem(e) });
+        return;
+      }
+      setExporting(null);
+      data = {
+        version: store.version,
+        company: store.company,
+        settings: store.settings,
+        products: store.products,
+        movements: parts.flatMap((p) => p.movements ?? []),
+        expenses: parts.flatMap((p) => p.expenses ?? []),
+        quotations: parts.flatMap((p) => p.quotations ?? []),
+        validities: parts.flatMap((p) => p.validities ?? []),
+        // Lembretes com data futura só existem na janela.
+        reminders: mergeRecords(parts.flatMap((p) => p.reminders ?? []), store.reminders),
+      };
+    }
+    download(
+      `extinpro-dados-${today()}.json`,
+      JSON.stringify(
+        { format: "itape-export-v1", exportedAt: new Date().toISOString(), demo, data },
+        null,
+        2,
+      ),
+      "application/json",
+    );
   }
   async function logout() {
     if (demo) {
@@ -530,7 +693,7 @@ export default function Workspace({
                   <span className="nav-count">{products.length}</span>
                 )}
                 {n.id === "quotations" && (
-                  <span className="nav-count">{store.quotations.length}</span>
+                  <span className="nav-count">{quotationCount}</span>
                 )}
                 {n.id === "validity" && calendarAlerts > 0 && (
                   <span
@@ -640,7 +803,12 @@ export default function Workspace({
         </header>
         {/* key={page} remonta o bloco: o título recorta e os números recontam
             a cada troca de seção. */}
-        <main id="content" className="content page-swap" key={page}>
+        <main
+          id="content"
+          className="content page-swap"
+          key={page}
+          aria-busy={loadingPeriod || undefined}
+        >
           {!demo && (
             <BillingNotice
               paidUntil={subscription.paidUntil}
@@ -787,6 +955,11 @@ export default function Workspace({
                 <span>
                   {displayDate(from)} — {displayDate(to)}
                 </span>
+                {loadingPeriod && (
+                  <span className="period-loading" role="status">
+                    <RefreshCw size={13} className="spin" /> Carregando período…
+                  </span>
+                )}
               </div>
               {!demo && (
                 <button
@@ -896,7 +1069,7 @@ export default function Workspace({
           {page === "overview" && (
             <>
               <GoalPanel
-                store={store}
+                store={view}
                 month={goalMonth}
                 now={calendarToday}
                 busy={saving}
@@ -920,7 +1093,7 @@ export default function Workspace({
                     </strong>
                     <span>em vendas no período</span>
                   </div>
-                  <Chart store={store} from={from} to={to} />
+                  <Chart store={view} from={from} to={to} />
                 </section>
                 <section className="panel attention-panel">
                   <PanelHeading
@@ -1116,7 +1289,7 @@ export default function Workspace({
             <section className="panel">
               <PanelHeading
                 title="Orçamentos salvos"
-                subtitle={`${store.quotations.length} ${store.quotations.length === 1 ? "orçamento disponível" : "orçamentos disponíveis"} · todos os períodos`}
+                subtitle={`${quotationCount} ${quotationCount === 1 ? "orçamento disponível" : "orçamentos disponíveis"} · todos os períodos`}
                 extra={!demo && (
                   <button className="refresh-button" disabled={saving || refreshing} onClick={refresh}>
                     <RefreshCw size={14} className={refreshing ? "spin" : ""} /> Atualizar
@@ -1134,8 +1307,8 @@ export default function Workspace({
                   />
                 </div>
               </div>
-              {quotations.length ? (
-                <div className="table-scroll">
+              {quotationRows.length ? (
+                <div className="table-scroll" aria-busy={quotationsLoading || undefined}>
                   <table>
                     <thead>
                       <tr>
@@ -1148,7 +1321,7 @@ export default function Workspace({
                       </tr>
                     </thead>
                     <tbody>
-                      {quotations.slice(tablePage * 10, tablePage * 10 + 10).map((quotation) => (
+                      {quotationRows.map((quotation) => (
                         <tr key={quotation.id}>
                           <td className="strong">{String(quotation.number).padStart(4, "0")}/{quotation.date.slice(0, 4)}</td>
                           <td className="strong">{quotation.client}</td>
@@ -1170,6 +1343,8 @@ export default function Workspace({
                     </tbody>
                   </table>
                 </div>
+              ) : quotationsLoading ? (
+                <p className="loading-line" role="status">Carregando orçamentos…</p>
               ) : (
                 <Empty
                   title={quotationNeedle ? "Nenhum orçamento encontrado" : "Nenhum orçamento salvo ainda"}
@@ -1178,7 +1353,7 @@ export default function Workspace({
                   {!quotationNeedle && <button onClick={() => open("sale")} disabled={saving}><Plus size={16} /> Registrar venda</button>}
                 </Empty>
               )}
-              <Pagination count={quotations.length} page={tablePage} setPage={setTablePage} />
+              <Pagination count={quotationTotal} page={tablePage} setPage={setTablePage} />
             </section>
           )}
           {page === "movements" && (
@@ -1251,6 +1426,8 @@ export default function Workspace({
                     </tbody>
                   </table>
                 </div>
+              ) : loadingPeriod ? (
+                <p className="loading-line" role="status">Carregando período…</p>
               ) : (
                 <Empty description="Não há movimentações neste período. Registre uma venda ou uma compra." />
               )}
@@ -1334,7 +1511,7 @@ export default function Workspace({
                     </button>
                   }
                 />
-                {store.expenses.filter((e) => e.date >= from && e.date <= to)
+                {view.expenses.filter((e) => e.date >= from && e.date <= to)
                   .length ? (
                   <div className="table-scroll">
                     <table>
@@ -1346,7 +1523,7 @@ export default function Workspace({
                         </tr>
                       </thead>
                       <tbody>
-                        {store.expenses
+                        {view.expenses
                           .filter((e) => e.date >= from && e.date <= to)
                           .slice()
                           .reverse()
@@ -1360,6 +1537,8 @@ export default function Workspace({
                       </tbody>
                     </table>
                   </div>
+                ) : loadingPeriod ? (
+                  <p className="loading-line" role="status">Carregando período…</p>
                 ) : (
                   <Empty
                     title="Nenhuma despesa neste período"
@@ -1427,7 +1606,7 @@ export default function Workspace({
                   <small>compradas menos vendidas</small>
                 </div>
               </div>
-              <Chart store={store} from={from} to={to} />
+              <Chart store={view} from={from} to={to} />
               <div className="report-totals">
                 <Statement label="Receita" value={stats.revenue} />
                 <Statement
@@ -1525,7 +1704,7 @@ export default function Workspace({
                   </tfoot>
                 </table>
               </div>
-              {!stats.sales.length && !stats.restocks.length && (
+              {!loadingPeriod && !stats.sales.length && !stats.restocks.length && (
                 <Empty
                   title="Nenhuma movimentação no período"
                   description="Selecione outra semana ou mês para consultar o histórico."
@@ -1586,26 +1765,11 @@ export default function Workspace({
                   </p>
                   <button
                     className="primary"
-                    onClick={() =>
-                      download(
-                        `extinpro-dados-${today()}.json`,
-                        JSON.stringify(
-                          {
-                            format: "itape-export-v1",
-                            exportedAt: new Date().toISOString(),
-                            demo,
-                            data: store,
-                          },
-                          null,
-                          2,
-                        ),
-                        "application/json",
-                      )
-                    }
-                    disabled={saving}
+                    onClick={exportData}
+                    disabled={saving || !!exporting}
                   >
                     <Download size={16} />
-                    Exportar dados
+                    {exporting ? `Exportando ${exporting} meses…` : "Exportar dados"}
                   </button>
                   <p className="panel-note">
                     Essa cópia permite consultar seus registros fora do sistema.

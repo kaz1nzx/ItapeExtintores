@@ -19,6 +19,9 @@
 --      As ações do administrador ficam registradas (quem, o quê, quando).
 --   7. Preferências da conta: meta de vendas por mês e valor médio da recarga
 --      (previsão de recargas). O cliente vê o próprio vencimento da assinatura.
+--   8. Janela de dados: a tela carrega o mês atual e o anterior, e busca o
+--      restante só quando precisa. O tamanho das respostas deixa de crescer
+--      com o histórico da loja.
 
 alter table public.itape_accounts add column if not exists company jsonb
   check (company is null or jsonb_typeof(company) = 'object');
@@ -427,6 +430,117 @@ $$;
 revoke all on function public.itape_state() from public, anon;
 revoke all on function itape_private.apply_command(jsonb, uuid, integer) from public, anon;
 grant execute on function public.itape_state(), itape_private.apply_command(jsonb, uuid, integer) to authenticated;
+
+-- Janela de dados. itape_state devolve o histórico inteiro, e a resposta
+-- cresce a cada venda até passar do limite da hospedagem. A tela passa a
+-- receber só o mês atual e o anterior (movimentações e despesas), as validades
+-- e lembretes pendentes e as contagens da conta. Períodos anteriores,
+-- orçamentos e a exportação vêm sob demanda. itape_state e itape_command
+-- continuam aqui para a versão anterior do site.
+create index if not exists itape_quotations_owner_date on public.itape_quotations(owner_id, date desc, number desc);
+create index if not exists itape_validities_owner_start on public.itape_validities(owner_id, start_date);
+create index if not exists itape_validities_owner_pending on public.itape_validities(owner_id, due_date) where status = 'pending';
+
+create or replace function public.itape_snapshot() returns jsonb
+language plpgsql stable security invoker set search_path = '' as $$
+declare
+  uid uuid := (select auth.uid());
+  local_today date := (now() at time zone 'America/Sao_Paulo')::date;
+  window_start date := (date_trunc('month', (now() at time zone 'America/Sao_Paulo')::date) - interval '1 month')::date;
+begin
+  if not itape_private.account_active() then raise exception 'Acesso suspenso. Entre em contato para reativar sua assinatura.'; end if;
+  return jsonb_build_object(
+    'since', window_start,
+    'version', coalesce((select version from public.itape_accounts where owner_id = uid), 0),
+    'company', (select company from public.itape_accounts where owner_id = uid),
+    'settings', coalesce((select settings from public.itape_accounts where owner_id = uid), '{}'::jsonb),
+    'products', coalesce((select jsonb_agg(to_jsonb(p) - 'owner_id' order by p.sku) from public.itape_products p where owner_id = uid), '[]'::jsonb),
+    'movements', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'quotationId', m.quotation_id, 'productId', m.product_id, 'productName', m.product_name, 'kind', m.kind, 'quantity', m.quantity, 'unitPrice', m.unit_price, 'unitCost', m.unit_cost, 'tax', m.tax, 'date', m.date, 'party', m.party, 'actor', m.actor, 'createdAt', m.created_at) order by m.date, m.created_at) from public.itape_movements m where owner_id = uid and m.date >= window_start), '[]'::jsonb),
+    'expenses', coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'description', e.description, 'amount', e.amount, 'date', e.date, 'actor', e.actor, 'createdAt', e.created_at) order by e.date, e.created_at) from public.itape_expenses e where owner_id = uid and e.date >= window_start), '[]'::jsonb),
+    -- Pendentes, só com os campos que a tela usa: são a maior parte da
+    -- resposta de uma loja movimentada (um ano de vendas a renovar).
+    'validities', coalesce((select jsonb_agg(jsonb_build_object('id', v.id, 'client', v.client, 'phone', v.phone, 'item', v.item, 'quantity', v.quantity, 'startDate', v.start_date, 'dueDate', v.due_date, 'status', v.status) order by v.due_date, v.created_at) from public.itape_validities v where owner_id = uid and v.status = 'pending'), '[]'::jsonb),
+    'reminders', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'title', r.title, 'date', r.date, 'notes', r.notes, 'status', r.status, 'createdAt', r.created_at) order by r.date, r.created_at) from public.itape_reminders r where owner_id = uid and (r.status = 'pending' or r.date >= window_start)), '[]'::jsonb),
+    'counts', jsonb_build_object(
+      'sales', (select count(*) from public.itape_movements where owner_id = uid and kind = 'sale'),
+      'purchases', (select count(*) from public.itape_movements where owner_id = uid and kind = 'purchase'),
+      'quotations', (select count(*) from public.itape_quotations where owner_id = uid),
+      -- Primeiro registro da conta: a exportação busca mês a mês a partir daqui.
+      'firstDate', least(
+        (select min(date) from public.itape_movements where owner_id = uid),
+        (select min(date) from public.itape_expenses where owner_id = uid),
+        (select min(date) from public.itape_quotations where owner_id = uid),
+        (select min(start_date) from public.itape_validities where owner_id = uid),
+        (select min(date) from public.itape_reminders where owner_id = uid and date <= local_today)
+      )
+    )
+  );
+end;
+$$;
+
+-- Um período anterior à janela: relatórios de meses passados e, com
+-- full_export, a exportação completa, feita mês a mês.
+create or replace function public.itape_history(from_date date, to_date date, full_export boolean) returns jsonb
+language plpgsql stable security invoker set search_path = '' as $$
+declare
+  uid uuid := (select auth.uid());
+begin
+  if not itape_private.account_active() then raise exception 'Acesso suspenso. Entre em contato para reativar sua assinatura.'; end if;
+  if from_date is null or to_date is null or full_export is null or to_date < from_date or to_date - from_date > 400 then raise exception 'Período inválido.'; end if;
+  return jsonb_build_object(
+    'from', from_date,
+    'to', to_date,
+    'movements', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'quotationId', m.quotation_id, 'productId', m.product_id, 'productName', m.product_name, 'kind', m.kind, 'quantity', m.quantity, 'unitPrice', m.unit_price, 'unitCost', m.unit_cost, 'tax', m.tax, 'date', m.date, 'party', m.party, 'actor', m.actor, 'createdAt', m.created_at) order by m.date, m.created_at) from public.itape_movements m where owner_id = uid and m.date between from_date and to_date), '[]'::jsonb),
+    'expenses', coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'description', e.description, 'amount', e.amount, 'date', e.date, 'actor', e.actor, 'createdAt', e.created_at) order by e.date, e.created_at) from public.itape_expenses e where owner_id = uid and e.date between from_date and to_date), '[]'::jsonb)
+  ) || case when full_export then jsonb_build_object(
+    'quotations', coalesce((select jsonb_agg(jsonb_build_object('id', q.id, 'number', q.number, 'date', q.date, 'client', q.client, 'phone', q.phone, 'paymentTerms', q.payment_terms, 'notes', q.notes, 'company', q.company, 'items', q.items, 'createdAt', q.created_at) order by q.date, q.number) from public.itape_quotations q where owner_id = uid and q.date between from_date and to_date), '[]'::jsonb),
+    'validities', coalesce((select jsonb_agg(jsonb_build_object('id', v.id, 'client', v.client, 'phone', v.phone, 'item', v.item, 'quantity', v.quantity, 'startDate', v.start_date, 'dueDate', v.due_date, 'status', v.status, 'movementId', v.movement_id, 'resolvedAt', v.resolved_at, 'createdAt', v.created_at) order by v.start_date, v.created_at) from public.itape_validities v where owner_id = uid and v.start_date between from_date and to_date), '[]'::jsonb),
+    'reminders', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'title', r.title, 'date', r.date, 'notes', r.notes, 'status', r.status, 'createdAt', r.created_at) order by r.date, r.created_at) from public.itape_reminders r where owner_id = uid and r.date between from_date and to_date), '[]'::jsonb)
+  ) else '{}'::jsonb end;
+end;
+$$;
+
+-- Orçamentos de todos os períodos, 10 por página, com a mesma busca da tela:
+-- nome do cliente ou número no formato 0001/2026.
+create or replace function public.itape_quotations(search text, page integer) returns jsonb
+language plpgsql stable security invoker set search_path = '' as $$
+declare
+  uid uuid := (select auth.uid());
+  needle text := lower(trim(coalesce(search, '')));
+begin
+  if not itape_private.account_active() then raise exception 'Acesso suspenso. Entre em contato para reativar sua assinatura.'; end if;
+  if length(needle) > 120 or page is null or page < 0 or page > 100000 then raise exception 'Busca inválida.'; end if;
+  return (
+    with found as (
+      select q.* from public.itape_quotations q
+      where q.owner_id = uid
+        and (needle = '' or strpos(lower(q.client || ' ' || repeat('0', greatest(0, 4 - length(q.number::text))) || q.number::text || '/' || q.year::text), needle) > 0)
+    )
+    select jsonb_build_object(
+      'total', (select count(*) from found),
+      'items', coalesce((
+        select jsonb_agg(jsonb_build_object('id', f.id, 'number', f.number, 'date', f.date, 'client', f.client, 'phone', f.phone, 'paymentTerms', f.payment_terms, 'notes', f.notes, 'company', f.company, 'items', f.items, 'createdAt', f.created_at) order by f.date desc, f.number desc)
+        from (select * from found order by date desc, number desc offset page * 10 limit 10) f
+      ), '[]'::jsonb)
+    )
+  );
+end;
+$$;
+
+-- Grava como itape_command e devolve a janela, mais o orçamento criado por
+-- esta operação (mesmo com data anterior à janela, para baixar o PDF).
+create or replace function public.itape_apply(command jsonb, request_id uuid, expected_version integer) returns jsonb
+language plpgsql security invoker set search_path = '' as $$
+begin
+  perform itape_private.apply_command(command, request_id, expected_version);
+  return public.itape_snapshot() || jsonb_build_object('quotation', (
+    select jsonb_build_object('id', q.id, 'number', q.number, 'date', q.date, 'client', q.client, 'phone', q.phone, 'paymentTerms', q.payment_terms, 'notes', q.notes, 'company', q.company, 'items', q.items, 'createdAt', q.created_at)
+    from public.itape_quotations q where q.id = itape_apply.request_id and q.owner_id = (select auth.uid())
+  ));
+end;
+$$;
+revoke all on function public.itape_snapshot(), public.itape_history(date, date, boolean), public.itape_quotations(text, integer), public.itape_apply(jsonb, uuid, integer) from public, anon;
+grant execute on function public.itape_snapshot(), public.itape_history(date, date, boolean), public.itape_quotations(text, integer), public.itape_apply(jsonb, uuid, integer) to authenticated;
 
 -- Painel do administrador: todas as contas de Authentication, com assinatura,
 -- uso e atividade diária dos últimos 30 dias. Mostra contagens de uso, nunca

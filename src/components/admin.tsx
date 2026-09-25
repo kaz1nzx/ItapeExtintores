@@ -40,7 +40,7 @@ import {
   type AdminOverview,
   type Billing,
 } from "@/lib/admin";
-import { Empty, Metric, Modal, PanelHeading } from "./primitives";
+import { Empty, Metric, Modal, PanelHeading, problem } from "./primitives";
 import { CountUp } from "./motion";
 import { ActivityChart, StatusBreakdown, UsageBars } from "./admin-charts";
 
@@ -117,14 +117,6 @@ const moment = (timestamp: string) =>
 const stamp = () =>
   new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 // Falha de rede ou resposta perdida: a mensagem do navegador não ajuda.
-const problem = (e: unknown) =>
-  e instanceof Error &&
-  e.message &&
-  e.name !== "TimeoutError" &&
-  !(e instanceof TypeError) &&
-  !(e instanceof SyntaxError)
-    ? e.message
-    : "Sem resposta do servidor. Verifique a conexão e tente novamente.";
 
 export default function AdminPanel({
   initial,

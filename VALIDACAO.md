@@ -62,3 +62,16 @@ A função preexistente `public.rls_auto_enable()`, usada como event trigger par
 - Não executado no Supabase real: falta aplicar o `upgrade.sql`.
 - O limite de tentativas vale por processo do servidor. Em hospedagem com várias instâncias, cada uma conta as suas.
 - As configurações do painel do Supabase (cadastros, senhas, limites, backups) não foram vistas nem alteradas.
+
+## Janela de dados (25/09/2026)
+
+- Problema: cada carregamento e cada registro salvo devolviam o histórico inteiro da loja. Com 15 vendas por dia, a resposta passaria do limite de 4,5 MB da Vercel em cerca de 7 meses.
+- Medição em PGlite, com uma loja de 15 vendas por dia durante um ano, gravada pelas funções do sistema: antes 7,89 MB por resposta, e crescendo; agora 1,79 MB (janela), 0,42 MB (dois meses antigos), 0,01 MB (página de orçamentos) e 0,67 MB (um mês da exportação).
+- `npm test` (70 testes, 4 novos: período necessário por visão, junção sem repetição, meses da exportação e totais da conta), `npm run check` e `npm run build`: aprovados.
+- SQL em PGlite: banco novo, banco com a versão publicada ("Versão Final") e banco anterior ao painel. `verify.sql` cobre a janela (nada anterior ao início, validades pendentes enxutas, totais da conta), o orçamento devolvido pela gravação, repetição sem duplicar, períodos antigos, exportação completa, busca de orçamentos por cliente e número, paginação, limites de período e busca, e bloqueio para conta sem acesso e anônima. Controle: o novo `verify.sql` falha no banco publicado.
+- Build de produção no Edge, com as chamadas à API respondidas pelas funções novas em PGlite (loja com 14 meses de histórico): 14 verificações aprovadas. Receita do mês e relatório de dezembro/2025 iguais aos do histórico completo; mês antigo buscado só quando escolhido; orçamentos com o total da conta, 10 por página e busca em todos os períodos; nova venda salva, orçamento no topo e PDF baixado; exportação com todos os registros, em 14 pedidos mensais; maior resposta 0,78 MB, contra 3,71 MB do histórico completo; nenhum erro na página.
+
+### Limites
+
+- Não executado no Supabase real. Sem o `upgrade.sql`, o site usa as funções anteriores e continua funcionando como antes, com o histórico inteiro.
+- Uma loja com 30 vendas por dia chega a cerca de 3,6 MB por resposta, por causa de um ano de validades pendentes: abaixo do limite, mas sem muita folga.

@@ -1,23 +1,60 @@
 import { z } from "zod";
 import { signedIn } from "@/lib/supabase";
 import { commandSchema } from "@/lib/domain";
-import { suspendedError } from "@/lib/admin";
+import { missingFunction, suspendedError } from "@/lib/admin";
 import { json, readBody, sameOrigin } from "@/lib/http";
 // A tela recarrega /app ao receber `suspended`, que mostra o aviso de acesso
 // suspenso no lugar do painel.
 const suspended = (message: string) =>
   json({ error: message, suspended: true }, 403);
-export async function GET() {
+const loadFailed = () =>
+  json({ error: "Não foi possível carregar os dados. Tente novamente." }, 502);
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+// GET sem parâmetros: janela de dados (mês atual e anterior).
+// ?from=&to=[&full=1]: período anterior à janela, ou um mês da exportação.
+// ?quotations=1&q=&page=: orçamentos de todos os períodos, 10 por página.
+const query = z.union([
+  z.object({ from: day, to: day, full: z.enum(["1"]).optional() }).strict(),
+  z
+    .object({
+      quotations: z.literal("1"),
+      q: z.string().max(120).optional(),
+      page: z.coerce.number().int().min(0).max(100_000).optional(),
+    })
+    .strict(),
+  z.object({}).strict(),
+]);
+export async function GET(request: Request) {
   const client = await signedIn();
   if (!client) return json({ error: "Entre novamente para continuar." }, 401);
-  const { data, error } = await client.rpc("itape_state");
+  const parsed = query.safeParse(
+    Object.fromEntries(new URL(request.url).searchParams),
+  );
+  if (!parsed.success) return json({ error: "Solicitação inválida." }, 400);
+  const params = parsed.data;
+  let result;
+  if ("from" in params)
+    result = await client.rpc("itape_history", {
+      from_date: params.from,
+      to_date: params.to,
+      full_export: params.full === "1",
+    });
+  else if ("quotations" in params)
+    result = await client.rpc("itape_quotations", {
+      search: params.q ?? "",
+      page: params.page ?? 0,
+    });
+  else {
+    result = await client.rpc("itape_snapshot");
+    // Banco sem a atualização: o estado completo, como antes.
+    if (result.error && missingFunction(result.error))
+      result = await client.rpc("itape_state");
+  }
+  const { data, error } = result;
   if (error && suspendedError(error)) return suspended(error.message);
-  return error
-    ? json(
-        { error: "Não foi possível carregar os dados. Tente novamente." },
-        502,
-      )
-    : json(data);
+  if (error?.message === "Período inválido." || error?.message === "Busca inválida.")
+    return json({ error: error.message }, 400);
+  return error ? loadFailed() : json(data);
 }
 export async function POST(request: Request) {
   try {
@@ -48,11 +85,15 @@ export async function POST(request: Request) {
       { error: "Confira os campos. Use valores positivos e uma data válida." },
       400,
     );
-  const { data, error } = await client.rpc("itape_command", {
+  const args = {
     command: parsed.data.command,
     request_id: parsed.data.requestId,
     expected_version: parsed.data.version,
-  });
+  };
+  let { data, error } = await client.rpc("itape_apply", args);
+  // Banco sem a atualização: grava pela função anterior, que devolve tudo.
+  if (error && missingFunction(error))
+    ({ data, error } = await client.rpc("itape_command", args));
   if (error && suspendedError(error)) return suspended(error.message);
   if (error) {
     // "Operação desconhecida." vem de uma função de banco anterior ao
