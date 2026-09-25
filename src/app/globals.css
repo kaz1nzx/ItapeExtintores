@@ -4018,3 +4018,514 @@ tr.is-suspended .product-name strong {
     max-width: 180px;
   }
 }
+
+/* ------------------------------------------------ comparação com o período */
+/* A cor fica na seta e no número; o rótulo segue a cor de texto. Altura
+   mínima de duas linhas para os cartões não desalinharem. */
+.metric-trend {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 10px;
+  min-height: 2.8em;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--steel);
+}
+.metric-trend svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.metric-trend b {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.metric-trend.good svg,
+.metric-trend.good b {
+  color: var(--green);
+}
+.metric-trend.bad svg,
+.metric-trend.bad b {
+  color: var(--red-deep);
+}
+.metric-trend.muted {
+  color: var(--faint);
+}
+
+/* ------------------------------------------------------------ meta do mês */
+.goal-panel {
+  padding: 20px 22px;
+  margin-bottom: 24px;
+}
+.goal-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+}
+.goal-head > div {
+  flex: 1;
+  min-width: 0;
+}
+.goal-head .eyebrow {
+  margin-bottom: 10px;
+}
+.goal-value {
+  display: block;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.goal-value small {
+  margin-left: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--steel);
+}
+.goal-percent {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+}
+.goal-percent.reached {
+  color: var(--green);
+}
+.goal-track {
+  position: relative;
+  height: 12px;
+  margin: 16px 0 14px;
+  background: var(--paper-2);
+}
+.goal-fill {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+  border-radius: 0 4px 4px 0;
+  transform-origin: left;
+  animation: draw-x 0.9s var(--ease) 0.1s backwards;
+}
+.goal-fill.reached {
+  background: var(--series-green);
+}
+/* Onde as vendas deveriam estar hoje, em ritmo constante até a meta. */
+.goal-pace,
+.pace-key {
+  background: var(--red);
+}
+.goal-pace {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  width: 2px;
+  transform: translateX(-1px);
+}
+.pace-key {
+  display: inline-block;
+  width: 2px;
+  height: 12px;
+}
+.goal-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  color: var(--steel);
+}
+.goal-facts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.goal-facts .good {
+  color: var(--green);
+  font-weight: 600;
+}
+.goal-facts .behind {
+  color: #8a5a0c;
+  font-weight: 600;
+}
+.goal-empty {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.goal-empty > div {
+  flex: 1;
+  min-width: 0;
+}
+.goal-empty strong {
+  font-size: 15px;
+}
+.goal-empty p {
+  margin-top: 4px;
+  font-size: 13px;
+}
+.goal-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  color: var(--red);
+}
+
+/* ---------------------------------------------------- previsão de recargas */
+.forecast-panel {
+  margin-bottom: 22px;
+}
+.forecast-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  padding: 18px 22px 0;
+}
+.forecast-headline strong {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.forecast-headline span {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--steel);
+}
+.forecast-headline b {
+  font-family: var(--font-display), sans-serif;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  text-transform: none;
+  color: var(--green);
+}
+.forecast-columns {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 6px;
+  height: 200px;
+  padding: 14px 22px;
+}
+.forecast-column {
+  height: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--steel);
+  white-space: normal;
+}
+.forecast-column::after {
+  background: var(--surface-2);
+}
+.forecast-column:hover:not(:disabled) {
+  color: var(--ink);
+}
+.forecast-column.selected {
+  box-shadow: inset 0 -2px 0 var(--red);
+}
+.forecast-value {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.forecast-bar {
+  flex: 1;
+  width: min(44px, 70%);
+  display: flex;
+  align-items: flex-end;
+}
+.forecast-bar i {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  background: var(--ink-2);
+  border-radius: 4px 4px 0 0;
+  transform-origin: bottom;
+  animation: rise-bar 0.7s var(--ease) backwards;
+}
+.forecast-column.late .forecast-bar i {
+  background: var(--amber);
+}
+.forecast-column.selected .forecast-bar i {
+  background: var(--red);
+}
+.forecast-label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.forecast-column.selected .forecast-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------- primeiros passos */
+.onboarding {
+  margin-bottom: 24px;
+}
+.onboarding-track {
+  height: 4px;
+  background: var(--paper-2);
+}
+.onboarding-track i {
+  display: block;
+  height: 100%;
+  background: var(--series-green);
+  transform-origin: left;
+  animation: draw-x 0.8s var(--ease) 0.1s backwards;
+}
+.onboarding-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.onboarding-steps li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+}
+.onboarding-steps li:last-child {
+  border-right: 0;
+}
+.onboarding-steps li.next {
+  background: var(--surface-2);
+}
+.onboarding-mark {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 6px;
+  border: 1px solid var(--line-2);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--steel);
+}
+.onboarding-steps li.done .onboarding-mark {
+  background: var(--series-green);
+  border-color: var(--series-green);
+  color: #fff;
+}
+.onboarding-steps li.next .onboarding-mark {
+  border-color: var(--red);
+  color: var(--red);
+}
+.onboarding-steps strong {
+  font-size: 14px;
+  color: var(--ink);
+}
+.onboarding-steps li.done strong {
+  color: var(--steel);
+}
+.onboarding-steps p {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.onboarding-steps button {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.onboarding-note {
+  margin-top: 6px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.onboarding-steps li.done .onboarding-note {
+  color: var(--green);
+}
+
+/* ------------------------------------------------- aviso da mensalidade */
+.billing-notice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  background: var(--surface);
+}
+.billing-notice > svg {
+  flex-shrink: 0;
+  color: var(--amber);
+}
+.billing-notice > div {
+  flex: 1;
+  min-width: 0;
+}
+.billing-notice strong {
+  font-size: 14px;
+  color: var(--ink);
+}
+.billing-notice p {
+  margin-top: 4px;
+  font-size: 13px;
+}
+.billing-notice.overdue {
+  border-left-color: var(--red);
+  background: var(--red-wash);
+}
+.billing-notice.overdue > svg {
+  color: var(--red);
+}
+.form-actions .push-left {
+  margin-right: auto;
+}
+
+@media (max-width: 1050px) {
+  .onboarding-steps {
+    grid-template-columns: 1fr;
+  }
+  .onboarding-steps li {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .onboarding-steps li:last-child {
+    border-bottom: 0;
+  }
+  /* Na lista empilhada, passo concluído vira uma linha só. */
+  .onboarding-steps li.done {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+  }
+  .onboarding-steps li.done .onboarding-mark {
+    margin-bottom: 0;
+  }
+  .onboarding-steps li.done p {
+    display: none;
+  }
+  .onboarding-steps li.done .onboarding-note {
+    margin: 0 0 0 auto;
+  }
+}
+@media (max-width: 760px) {
+  .goal-panel {
+    padding: 16px;
+  }
+  .goal-head {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .goal-head > div {
+    flex-basis: 100%;
+  }
+  .goal-value {
+    font-size: 22px;
+  }
+  .goal-empty {
+    flex-wrap: wrap;
+  }
+  .forecast-headline {
+    padding: 16px 16px 0;
+  }
+  .forecast-columns {
+    gap: 2px;
+    height: 180px;
+    padding: 12px 10px;
+  }
+  .forecast-label {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+  .billing-notice {
+    flex-wrap: wrap;
+    padding: 14px 16px;
+  }
+  /* O botão desce para uma linha própria; texto e fechar ficam na primeira. */
+  .billing-notice .button {
+    order: 3;
+    flex: 1 1 100%;
+  }
+  .forecast-panel .panel-heading {
+    flex-wrap: wrap;
+  }
+  .forecast-panel .panel-heading .text-button {
+    padding-left: 0;
+  }
+}
+
+/* ------------------------------------------- ativação e registro de ações */
+.badge.pending {
+  color: var(--steel);
+  background: var(--surface-2);
+  border-style: dashed;
+}
+.row-toggle.activate {
+  color: var(--green);
+  border-color: #9fcfc6;
+}
+.row-toggle.activate::after {
+  background: var(--green);
+}
+.row-toggle.activate:hover:not(:disabled) {
+  border-color: var(--green);
+}
+.audit-panel {
+  margin-bottom: 24px;
+}
+.audit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.audit-list li {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  align-items: baseline;
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.audit-list li:last-child {
+  border-bottom: 0;
+}
+.audit-list time {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.audit-list strong {
+  color: var(--ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .audit-list li {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 12px 16px;
+  }
+}

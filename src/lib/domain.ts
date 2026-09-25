@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+// Sem compilar validações com eval: o CSP do site bloqueia eval, e o zod nem
+// chega a testar (o teste gera um alerta de violação no navegador).
+z.config({ jitless: true });
+
 export type Product = {
   id: string;
   name: string;
@@ -60,9 +64,16 @@ export type Reminder = {
   status: "pending" | "done";
   createdAt: string;
 };
+// Preferências da conta. A meta vale do mês em que foi definida em diante,
+// até ser trocada: mudar a meta de outubro não reescreve a de setembro.
+export type Settings = {
+  goals?: Record<string, number>;
+  rechargePrice?: number;
+};
 export type Store = {
   version: number;
   company: Company | null;
+  settings: Settings;
   products: Product[];
   movements: Movement[];
   expenses: Expense[];
@@ -102,6 +113,7 @@ export type User = { id: string; name: string; role: "admin" | "operator" };
 export const emptyStore = (): Store => ({
   version: 0,
   company: null,
+  settings: {},
   products: [],
   movements: [],
   expenses: [],
@@ -113,6 +125,7 @@ export const emptyStore = (): Store => ({
 export const withDefaults = (store: Store): Store => ({
   ...store,
   company: store.company ? { ...QUOTATION_COMPANY, ...store.company } : null,
+  settings: store.settings ?? {},
   validities: store.validities ?? [],
   reminders: store.reminders ?? [],
   quotations: store.quotations ?? [],
@@ -201,8 +214,16 @@ export const companySchema = z.object({
   contact: z.string().trim().max(120),
   phone,
 });
+const month = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+  .refine((v) => v >= "2000-01" && v <= "2100-12", "Informe um mês válido.");
 export const commandSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("company"), company: companySchema }),
+  // Meta de vendas a partir do mês; 0 encerra a meta desse mês em diante.
+  z.object({ kind: z.literal("goal"), month, amount: cents }),
+  // Valor médio da recarga, usado no potencial da previsão de recargas.
+  z.object({ kind: z.literal("recharge_price"), amount: cents }),
   z.object({
     kind: z.literal("reminder"),
     title: text,
@@ -291,8 +312,13 @@ export function applyCommand(
   next.validities ??= [];
   next.reminders ??= [];
   next.quotations ??= [];
+  next.settings ??= {};
   if (cmd.kind === "company") {
     next.company = { ...cmd.company };
+  } else if (cmd.kind === "goal") {
+    next.settings.goals = { ...next.settings.goals, [cmd.month]: cmd.amount };
+  } else if (cmd.kind === "recharge_price") {
+    next.settings.rechargePrice = cmd.amount;
   } else if (cmd.kind === "product") {
     if (
       next.products.some(
@@ -587,6 +613,29 @@ export function demoStore(): Store {
       createdAt: new Date().toISOString(),
     };
   });
+  // Vendas do mês anterior, para a comparação com o período anterior ter base.
+  const earlier: Movement[] = Array.from({ length: 20 }, (_, i) => {
+    const p = products[(i + 2) % 5];
+    return {
+      id: `demo-anterior-${i}`,
+      productId: p.id,
+      productName: p.name,
+      kind: "sale",
+      quantity: [2, 1, 3, 2, 1, 3, 2][i % 7],
+      unitPrice: p.price,
+      unitCost: p.cost,
+      tax: p.tax,
+      date: daysBefore(today(), 45 - i),
+      party: [
+        "Padaria Pão Quente",
+        "Clínica Vida",
+        "Oficina do Zé",
+        "Hotel Serra Azul",
+      ][i % 4],
+      actor: "Demonstração",
+      createdAt: new Date().toISOString(),
+    };
+  });
   // Algumas entradas de estoque para a demonstração mostrar também o volume
   // comprado no período, e não só o vendido.
   const restocks: Movement[] = (
@@ -650,7 +699,7 @@ export function demoStore(): Store {
       };
     },
   );
-  const fromSales: Validity[] = movements.map((m) => {
+  const fromSales: Validity[] = [...earlier, ...movements].map((m) => {
     const p = products.find((x) => x.id === m.productId)!;
     return {
       id: `${m.id}-validade`,
@@ -669,11 +718,12 @@ export function demoStore(): Store {
   return {
     version: 0,
     company: null,
+    settings: { goals: { [today().slice(0, 7)]: 1800000 }, rechargePrice: 4500 },
     products,
     validities: [...history, ...fromSales],
     reminders: [],
     quotations: [],
-    movements: [...movements, ...restocks].sort((a, b) =>
+    movements: [...earlier, ...movements, ...restocks].sort((a, b) =>
       a.date.localeCompare(b.date),
     ),
     expenses: [

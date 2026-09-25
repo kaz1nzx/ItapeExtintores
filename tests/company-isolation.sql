@@ -13,6 +13,8 @@ declare
   rows_found integer;
 begin
   insert into auth.users(id) values(a),(b);
+  -- Contas novas aguardam ativação; as duas deste teste já começam ativas.
+  insert into itape_private.subscriptions(owner_id, status) values(a, 'active'), (b, 'active');
   perform set_config('request.jwt.claims',jsonb_build_object('sub',a,'role','authenticated','is_anonymous',false)::text,true);
   execute 'set local role authenticated';
   if public.itape_state()->'company' <> 'null'::jsonb then raise exception 'New account inherited company'; end if;

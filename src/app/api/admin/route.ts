@@ -5,7 +5,7 @@ import {
   adminOnlyError,
   missingFunction,
 } from "@/lib/admin";
-import { json, sameOrigin } from "@/lib/http";
+import { json, readBody, sameOrigin } from "@/lib/http";
 // A regra de acesso fica no banco: estas rotas só repassam a sessão, e uma
 // conta sem cadastro em itape_private.admins recebe 403.
 function failure(error: { code?: string; message: string }) {
@@ -42,8 +42,8 @@ export async function POST(request: Request) {
   }
   const client = await signedIn();
   if (!client) return json({ error: "Entre novamente para continuar." }, 401);
-  const raw = await request.text();
-  if (raw.length > 4096)
+  const raw = await readBody(request, 4096);
+  if (raw === null)
     return json({ error: "Solicitação muito grande." }, 413);
   let value;
   try {

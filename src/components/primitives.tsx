@@ -1,6 +1,16 @@
 "use client";
 import { useEffect, useRef, useId, type ReactNode } from "react";
-import { X, FireExtinguisher, PackageOpen, type LucideIcon } from "lucide-react";
+import {
+  X,
+  FireExtinguisher,
+  PackageOpen,
+  ArrowUpRight,
+  ArrowDownRight,
+  Minus,
+  type LucideIcon,
+} from "lucide-react";
+import { money } from "@/lib/domain";
+import { formatPercent, trend } from "@/lib/insights";
 export function Modal({
   title,
   subtitle,
@@ -98,6 +108,7 @@ export function Metric({
   icon: Icon,
   color,
   highlight = false,
+  trend,
 }: {
   index: number;
   title: string;
@@ -106,6 +117,7 @@ export function Metric({
   icon: LucideIcon;
   color: string;
   highlight?: boolean;
+  trend?: ReactNode;
 }) {
   return (
     <article className={`metric ${highlight ? "highlight" : ""}`}>
@@ -121,11 +133,49 @@ export function Metric({
         </span>
       </div>
       <strong>{value}</strong>
+      {trend}
       <small>
         {highlight && <span className="dot" />}
         {detail}
       </small>
     </article>
+  );
+}
+// Variação contra o período anterior. A cor diz se a mudança é boa (receita
+// subindo) ou ruim (custo subindo); a seta e o sinal dizem a direção, então a
+// leitura não depende só da cor.
+export function TrendLine({
+  current,
+  previous,
+  label,
+  upIsGood,
+}: {
+  current: number;
+  previous: number;
+  label: string;
+  upIsGood?: boolean;
+}) {
+  if (!current && !previous)
+    return <span className="metric-trend muted">Sem movimento nos dois períodos</span>;
+  const t = trend(current, previous);
+  const Arrow = t.direction === "up" ? ArrowUpRight : t.direction === "down" ? ArrowDownRight : Minus;
+  const tone =
+    t.direction === "flat" || upIsGood === undefined
+      ? "neutral"
+      : (t.direction === "up") === upIsGood
+        ? "good"
+        : "bad";
+  const amount =
+    t.direction === "flat"
+      ? "Igual"
+      : t.percent !== null
+        ? formatPercent(t.percent)
+        : `${t.difference > 0 ? "+" : "−"}${money(Math.abs(t.difference))}`;
+  return (
+    <span className={`metric-trend ${tone}`}>
+      <Arrow size={14} aria-hidden="true" />
+      <b>{amount}</b> {label}
+    </span>
   );
 }
 export function PanelHeading({

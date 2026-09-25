@@ -2,7 +2,7 @@ import { z } from "zod";
 import { signedIn } from "@/lib/supabase";
 import { commandSchema } from "@/lib/domain";
 import { suspendedError } from "@/lib/admin";
-import { json, sameOrigin } from "@/lib/http";
+import { json, readBody, sameOrigin } from "@/lib/http";
 // A tela recarrega /app ao receber `suspended`, que mostra o aviso de acesso
 // suspenso no lugar do painel.
 const suspended = (message: string) =>
@@ -27,8 +27,8 @@ export async function POST(request: Request) {
   }
   const client = await signedIn();
   if (!client) return json({ error: "Entre novamente para continuar." }, 401);
-  const raw = await request.text();
-  if (raw.length > 8192)
+  const raw = await readBody(request, 8192);
+  if (raw === null)
     return json({ error: "Solicitação muito grande." }, 413);
   let value;
   try {

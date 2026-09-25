@@ -55,13 +55,19 @@ import {
 } from "@/lib/domain";
 import OperationForm, { type FormMode } from "./operation-form";
 import CompanyForm from "./company-form";
-import { Empty, Extinguisher, Metric, PanelHeading, download } from "./primitives";
+import { Empty, Extinguisher, Metric, PanelHeading, TrendLine, download } from "./primitives";
 import { CountUp, Reveal } from "./motion";
 import Chart from "./chart";
 import ValidityPage, {
   ValidityStrip,
   ValidityUpgradeNotice,
 } from "./validity";
+import { goalFor, monthName, previousPeriod } from "@/lib/insights";
+import GoalPanel from "./goal";
+import RechargeForecast from "./forecast";
+import Onboarding, { type Step } from "./onboarding";
+import BillingNotice from "./billing-notice";
+import AmountDialog from "./amount-dialog";
 
 const nav = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
@@ -95,11 +101,16 @@ export default function Workspace({
   user,
   demo = false,
   admin = false,
+  subscription = { paidUntil: null, monthlyFee: 0 },
+  support = null,
 }: {
   initial: Store;
   user: User;
   demo?: boolean;
   admin?: boolean;
+  // Assinatura da própria conta, registrada no painel do administrador.
+  subscription?: { paidUntil: string | null; monthlyFee: number };
+  support?: string | null;
 }) {
   const [store, setStore] = useState(() => withDefaults(initial));
   // Um banco sem database/upgrade.sql não devolve a lista de validades. Nesse
@@ -167,6 +178,14 @@ export default function Workspace({
   const from =
     period === "week" ? daysBefore(anchor, 6) : `${anchor.slice(0, 7)}-01`;
   const stats = useMemo(() => summarize(store, from, to), [store, from, to]);
+  const previous = previousPeriod(period, from, to);
+  const before = useMemo(
+    () => summarize(store, previous.from, previous.to),
+    [store, previous.from, previous.to],
+  );
+  // A meta é mensal: vale o mês da data escolhida, também na visão semanal.
+  const goalMonth = anchor.slice(0, 7);
+  const [amountDialog, setAmountDialog] = useState<"goal" | "recharge" | null>(null);
   const products = store.products.filter((p) => p.active);
   const low = products.filter((p) => p.stock <= p.minimum);
   // Clientes a contatar: vencidos ou vencendo dentro da janela de aviso.
@@ -210,6 +229,11 @@ export default function Workspace({
   function open(mode: FormMode, product?: Product, validity?: Validity) {
     if (busy.current) return;
     setForm({ mode, product, validity });
+  }
+  function startStep(step: Step) {
+    if (step === "company") go("settings");
+    else if (step === "goal") setAmountDialog("goal");
+    else open(step);
   }
   async function downloadQuotation(quotation: Quotation) {
     if (pdfLock.current) return;
@@ -617,6 +641,15 @@ export default function Workspace({
         {/* key={page} remonta o bloco: o título recorta e os números recontam
             a cada troca de seção. */}
         <main id="content" className="content page-swap" key={page}>
+          {!demo && (
+            <BillingNotice
+              paidUntil={subscription.paidUntil}
+              monthlyFee={subscription.monthlyFee}
+              now={calendarToday}
+              support={support}
+              email={user.name}
+            />
+          )}
           {lastQuotation && (
             <section className="sale-pdf-notice" aria-label="Orçamento da venda registrada">
               <div><strong>Venda registrada · {lastQuotation.client}</strong><p>Orçamento {String(lastQuotation.number).padStart(4, "0")}/{lastQuotation.date.slice(0, 4)} salvo na aba Orçamentos.</p></div>
@@ -694,6 +727,14 @@ export default function Workspace({
               )}
             </div>
           </div>
+          {page === "overview" && (
+            <Onboarding
+              store={store}
+              userId={user.id}
+              busy={saving}
+              onStep={startStep}
+            />
+          )}
           {page !== "stock" && page !== "settings" && page !== "validity" && page !== "quotations" && (
             <div className="period-bar">
               <div className="segmented" data-active={period}>
@@ -775,6 +816,14 @@ export default function Workspace({
                 detail="Itens vendidos, despesas e impostos"
                 icon={ArrowDownLeft}
                 color="orange"
+                trend={
+                  <TrendLine
+                    current={stats.cogs + stats.expenses + stats.taxes}
+                    previous={before.cogs + before.expenses + before.taxes}
+                    label={previous.label}
+                    upIsGood={false}
+                  />
+                }
               />
               <Metric
                 index={2}
@@ -783,6 +832,14 @@ export default function Workspace({
                 detail={`${stats.sales.length} vendas no período`}
                 icon={CircleDollarSign}
                 color="red"
+                trend={
+                  <TrendLine
+                    current={stats.revenue}
+                    previous={before.revenue}
+                    label={previous.label}
+                    upIsGood
+                  />
+                }
               />
               <Metric
                 index={3}
@@ -792,6 +849,14 @@ export default function Workspace({
                 icon={TrendingUp}
                 color="green"
                 highlight
+                trend={
+                  <TrendLine
+                    current={stats.profit}
+                    previous={before.profit}
+                    label={previous.label}
+                    upIsGood
+                  />
+                }
               />
               <Metric
                 index={4}
@@ -814,11 +879,29 @@ export default function Workspace({
                 }
                 icon={Boxes}
                 color="blue"
+                trend={
+                  page === "overview" ? (
+                    <span className="metric-trend muted">Saldo de hoje, sem comparação</span>
+                  ) : (
+                    <TrendLine
+                      current={stats.purchases}
+                      previous={before.purchases}
+                      label={previous.label}
+                    />
+                  )
+                }
               />
             </section>
           )}
           {page === "overview" && (
             <>
+              <GoalPanel
+                store={store}
+                month={goalMonth}
+                now={calendarToday}
+                busy={saving}
+                onEdit={() => setAmountDialog("goal")}
+              />
               {ready && (
                 <ValidityStrip
                   validities={store.validities}
@@ -937,6 +1020,15 @@ export default function Workspace({
               onCreate={() => open("validity")}
               onRenew={(v) => open("renew", undefined, v)}
               onDismiss={(v) => open("dismiss", undefined, v)}
+              forecast={
+                <RechargeForecast
+                  validities={store.validities}
+                  now={calendarToday}
+                  price={store.settings.rechargePrice ?? 0}
+                  busy={saving}
+                  onEditPrice={() => setAmountDialog("recharge")}
+                />
+              }
             />
           )}
           {page === "stock" && (
@@ -1543,6 +1635,33 @@ export default function Workspace({
           products={products}
           close={() => setForm(null)}
           save={save}
+        />
+      )}
+      {amountDialog === "goal" && (
+        <AmountDialog
+          title="Meta de vendas"
+          subtitle={`A partir de ${monthName(goalMonth)} de ${goalMonth.slice(0, 4)}`}
+          label="Meta do mês (R$)"
+          hint={`Vale para ${monthName(goalMonth)} e para os meses seguintes, até você definir outra. Os meses anteriores mantêm a meta que tinham.`}
+          initial={goalFor(store.settings, goalMonth)}
+          saving={saving}
+          command={(amount) => ({ kind: "goal", month: goalMonth, amount })}
+          onSave={save}
+          close={() => setAmountDialog(null)}
+          removeLabel="Remover meta"
+        />
+      )}
+      {amountDialog === "recharge" && (
+        <AmountDialog
+          title="Valor da recarga"
+          subtitle="Média cobrada por extintor"
+          label="Valor médio da recarga (R$)"
+          hint="Usado para estimar o potencial da previsão de recargas. Use a média do que você cobra por extintor; os preços reais continuam nas vendas."
+          initial={store.settings.rechargePrice ?? 0}
+          saving={saving}
+          command={(amount) => ({ kind: "recharge_price", amount })}
+          onSave={save}
+          close={() => setAmountDialog(null)}
         />
       )}
       {notice && (

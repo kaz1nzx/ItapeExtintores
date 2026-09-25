@@ -4,6 +4,7 @@ import {
   adminCommandSchema,
   billing,
   billingQueue,
+  describeEvent,
   missingFunction,
   nextPaidUntil,
   summarizeAccounts,
@@ -55,6 +56,7 @@ test("resume contas: receita mensal só das ativas e atraso separado das suspens
   assert.deepEqual(s, {
     total: 4,
     active: 3,
+    pending: 0,
     suspended: 1,
     overdue: 1,
     current: 2,
@@ -100,6 +102,33 @@ test("valida comandos do administrador", () => {
   assert.ok(!ok({ kind: "plan", accountId: id, monthlyFee: 100, paidUntil: null, notes: "x".repeat(1001) }));
   assert.ok(!ok({ kind: "payment", accountId: id, reactivate: true }));
   assert.ok(!ok({ kind: "delete", accountId: id }));
+});
+
+test("conta aguardando ativação não conta como ativa nem entra na cobrança", () => {
+  const waiting = account({ id: "w", status: "pending", paidUntil: "2026-09-01", operations30: 0 });
+  assert.equal(billing(waiting, today), "pending");
+  const s = summarizeAccounts([waiting, account({ id: "a", paidUntil: "2026-10-20", operations30: 3 })], today);
+  assert.equal(s.pending, 1);
+  assert.equal(s.active, 1);
+  assert.equal(s.suspended, 0);
+  assert.equal(s.mrr, 14990);
+  assert.equal(s.idle, 0);
+  assert.deepEqual(billingQueue([waiting], today), []);
+});
+
+test("registro de ações vira frase legível", () => {
+  const base = { id: 1, createdAt: "2026-09-24T20:00:00Z", admin: "dono@x.com", account: "Fogo Zero" };
+  assert.equal(describeEvent({ ...base, action: "status", details: { from: "active", to: "suspended" } }), "suspendeu o acesso de Fogo Zero");
+  assert.equal(describeEvent({ ...base, action: "status", details: { from: "pending", to: "active" } }), "ativou a conta de Fogo Zero");
+  assert.equal(describeEvent({ ...base, action: "status", details: { from: "suspended", to: "active" } }), "reativou o acesso de Fogo Zero");
+  assert.equal(
+    describeEvent({ ...base, action: "payment", details: { from: "2026-09-10", to: "2026-10-10", reactivated: true } }),
+    "registrou o pagamento de Fogo Zero (10/09/2026 → 10/10/2026) e liberou o acesso",
+  );
+  assert.match(
+    describeEvent({ ...base, action: "plan", details: { monthlyFee: 14990, paidUntil: null } }),
+    /^editou a assinatura de Fogo Zero: R\$\s149,90, vencimento sem vencimento$/,
+  );
 });
 
 test("reconhece conta suspensa e banco sem a atualização", () => {

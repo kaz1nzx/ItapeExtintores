@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Archivo, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 const display = Archivo({
@@ -17,9 +18,12 @@ export const metadata: Metadata = {
   description: "Estoque e financeiro em um só lugar.",
   robots: { index: false, follow: false },
 };
-export default function Layout({
+export default async function Layout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  // Toda página é gerada por requisição: é o que permite o nonce do CSP
+  // (src/proxy.ts) chegar aos scripts. Página estática não teria o nonce.
+  await connection();
   return (
     <html lang="pt-BR" className={`${display.variable} ${mono.variable}`}>
       <body>{children}</body>

@@ -7,6 +7,8 @@ select set_config('itape.test_product', gen_random_uuid()::text, true);
 select set_config('itape.test_purchase', gen_random_uuid()::text, true);
 insert into auth.users(id, aud, role, email)
 values(current_setting('itape.test_uid')::uuid, 'authenticated', 'authenticated', 'itape-transaction-test-' || current_setting('itape.test_uid') || '@example.invalid');
+-- New accounts wait for activation; this fixture starts active.
+insert into itape_private.subscriptions(owner_id, status) values(current_setting('itape.test_uid')::uuid, 'active');
 select set_config('request.jwt.claims', jsonb_build_object('sub', current_setting('itape.test_uid'), 'role', 'authenticated', 'email', 'fixture@example.invalid')::text, true);
 set local role authenticated;
 do $$
@@ -64,8 +66,10 @@ begin
   begin update public.itape_validities set due_date = d::date where true; exception when insufficient_privilege then blocked := true; end;
   if not blocked then raise exception 'Test failed: direct validity update accepted'; end if;
   perform set_config('request.jwt.claims', jsonb_build_object('sub',gen_random_uuid(),'role','authenticated')::text,true);
-  s := public.itape_state();
-  if jsonb_array_length(s->'products') <> 0 or jsonb_array_length(s->'movements') <> 0 or coalesce(jsonb_array_length(s->'validities'), -1) <> 0 then raise exception 'Test failed: RLS isolation'; end if;
+  blocked := false;
+  begin perform public.itape_state(); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: account without activation read state'; end if;
+  if exists(select 1 from public.itape_products) or exists(select 1 from public.itape_movements) or exists(select 1 from public.itape_validities) then raise exception 'Test failed: RLS isolation'; end if;
 end;
 $$;
 reset role;
@@ -94,7 +98,7 @@ declare
 begin
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', jsonb_build_object('sub', customer, 'role', 'authenticated')::text, true);
-  if public.itape_access() <> '{"active": true, "admin": false}'::jsonb then raise exception 'Test failed: customer access'; end if;
+  if not public.itape_access() @> '{"active": true, "admin": false, "status": "active", "paidUntil": null}'::jsonb then raise exception 'Test failed: customer access'; end if;
   blocked := false;
   begin perform public.itape_admin_overview(); exception when raise_exception then blocked := true; end;
   if not blocked then raise exception 'Test failed: customer opened admin overview'; end if;
@@ -106,7 +110,7 @@ begin
   if not blocked then raise exception 'Test failed: direct subscription read'; end if;
 
   perform set_config('request.jwt.claims', jsonb_build_object('sub', admin, 'role', 'authenticated')::text, true);
-  if public.itape_access() <> '{"active": true, "admin": true}'::jsonb then raise exception 'Test failed: admin access'; end if;
+  if not public.itape_access() @> '{"active": true, "admin": true}'::jsonb then raise exception 'Test failed: admin access'; end if;
   o := public.itape_admin_command(jsonb_build_object('kind','status','accountId',customer,'status','suspended'));
   select a into account from jsonb_array_elements(o->'accounts') a where a->>'id' = customer::text;
   if account->>'status' <> 'suspended' or (account->>'products')::int <> 1 or (account->>'operations30')::int < 1 then raise exception 'Test failed: suspension in overview'; end if;
@@ -137,8 +141,55 @@ begin
   perform set_config('request.jwt.claims', jsonb_build_object('sub', customer, 'role', 'authenticated')::text, true);
   s := public.itape_state();
   if jsonb_array_length(s->'products') <> 1 then raise exception 'Test failed: data back after reactivation'; end if;
+  if not public.itape_access() @> '{"paidUntil": "2026-02-28", "monthlyFee": 14990}'::jsonb then raise exception 'Test failed: own subscription in access'; end if;
+  -- Preferences: monthly goals kept per month and the average recharge price.
+  if s->'settings' <> '{}'::jsonb then raise exception 'Test failed: empty settings'; end if;
+  s := public.itape_command(jsonb_build_object('kind','goal','month','2026-09','amount',1800000), gen_random_uuid(), (s->>'version')::int);
+  s := public.itape_command(jsonb_build_object('kind','goal','month','2026-11','amount',2500000), gen_random_uuid(), (s->>'version')::int);
+  s := public.itape_command(jsonb_build_object('kind','recharge_price','amount',4500), gen_random_uuid(), (s->>'version')::int);
+  if s->'settings' <> '{"goals": {"2026-09": 1800000, "2026-11": 2500000}, "rechargePrice": 4500}'::jsonb then raise exception 'Test failed: settings'; end if;
+  blocked := false;
+  begin perform public.itape_command(jsonb_build_object('kind','goal','month','2026-13','amount',100), gen_random_uuid(), (s->>'version')::int); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: invalid goal month accepted'; end if;
+  blocked := false;
+  begin perform public.itape_command(jsonb_build_object('kind','recharge_price','amount',-1), gen_random_uuid(), (s->>'version')::int); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: negative recharge price accepted'; end if;
   execute 'reset role';
 end;
 $$;
-select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, multi-item batch, validity scheduling, renewal, dismissal, owner isolation, anonymous denial, subscription suspension, admin-only management, payment retry' as verification;
+-- New accounts wait for the admin; every admin action is logged.
+select set_config('itape.test_new', gen_random_uuid()::text, true);
+insert into auth.users(id, aud, role, email)
+values(current_setting('itape.test_new')::uuid, 'authenticated', 'authenticated', 'itape-new-test-' || current_setting('itape.test_new') || '@example.invalid');
+do $$
+declare
+  fresh uuid := current_setting('itape.test_new')::uuid;
+  admin uuid := current_setting('itape.test_admin')::uuid;
+  o jsonb;
+  account jsonb;
+  blocked boolean;
+begin
+  execute 'set local role authenticated';
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', fresh, 'role', 'authenticated')::text, true);
+  if not public.itape_access() @> '{"active": false, "status": "pending"}'::jsonb then raise exception 'Test failed: new account starts pending'; end if;
+  blocked := false;
+  begin perform public.itape_command(jsonb_build_object('kind','recharge_price','amount',100), gen_random_uuid(), 0); exception when raise_exception then blocked := true; end;
+  if not blocked then raise exception 'Test failed: pending account wrote'; end if;
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', admin, 'role', 'authenticated')::text, true);
+  o := public.itape_admin_command(jsonb_build_object('kind','plan','accountId',fresh,'monthlyFee',9900,'paidUntil',null,'notes',''));
+  select a into account from jsonb_array_elements(o->'accounts') a where a->>'id' = fresh::text;
+  if account->>'status' <> 'pending' then raise exception 'Test failed: editing the plan activated the account'; end if;
+  o := public.itape_admin_command(jsonb_build_object('kind','status','accountId',fresh,'status','active'));
+  if (select count(*) from jsonb_array_elements(o->'events') e where e->>'account' like 'itape-new-test-%') <> 2 then raise exception 'Test failed: admin events logged'; end if;
+  if not exists(select 1 from jsonb_array_elements(o->'events') e where e->>'action' = 'status' and e->'details' = '{"from": "pending", "to": "active"}'::jsonb and e->>'admin' like 'itape-admin-test-%') then raise exception 'Test failed: activation event'; end if;
+  blocked := false;
+  begin perform 1 from itape_private.admin_events; exception when insufficient_privilege then blocked := true; end;
+  if not blocked then raise exception 'Test failed: direct event read'; end if;
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', fresh, 'role', 'authenticated')::text, true);
+  if not public.itape_access() @> '{"active": true, "status": "active"}'::jsonb then raise exception 'Test failed: activation'; end if;
+  perform public.itape_state();
+  execute 'reset role';
+end;
+$$;
+select 'PASS: creation, purchase, idempotency, version conflict, oversell, rollback, sale, average cost, historical snapshot, direct write denial, multi-item batch, validity scheduling, renewal, dismissal, owner isolation, anonymous denial, subscription suspension, admin-only management, payment retry, own subscription notice, sales goals, recharge price, activation required, admin audit log' as verification;
 rollback;

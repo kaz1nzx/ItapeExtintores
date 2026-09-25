@@ -24,6 +24,8 @@ import {
   Info,
   ShieldCheck,
   ShieldUser,
+  UserPlus,
+  History,
 } from "lucide-react";
 import { daysBetween, money } from "@/lib/domain";
 import {
@@ -32,6 +34,7 @@ import {
   billingQueue,
   nextPaidUntil,
   summarizeAccounts,
+  describeEvent,
   type AdminAccount,
   type AdminCommand,
   type AdminOverview,
@@ -46,7 +49,7 @@ const nav = [
   { id: "accounts", label: "Contas", icon: Users },
 ] as const;
 type View = (typeof nav)[number]["id"];
-type Filter = "all" | "active" | "overdue" | "suspended";
+type Filter = "all" | "active" | "pending" | "overdue" | "suspended";
 type DialogKind = "status" | "plan" | "payment";
 
 const integer = (n: number) => String(Math.round(n));
@@ -99,7 +102,18 @@ const badges: Record<Billing, { label: string; className: string }> = {
   untracked: { label: "Ativa", className: "success" },
   overdue: { label: "Em atraso", className: "warning" },
   suspended: { label: "Suspensa", className: "off" },
+  pending: { label: "Aguardando ativação", className: "pending" },
 };
+// Data e hora do registro de ações, no fuso dos registros.
+const moment = (timestamp: string) =>
+  new Date(timestamp).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 const stamp = () =>
   new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 // Falha de rede ou resposta perdida: a mensagem do navegador não ajuda.
@@ -143,6 +157,8 @@ export default function AdminPanel({
   }, [notice]);
 
   const { today, accounts, activity } = data;
+  // Banco sem o registro de ações (upgrade antigo) não manda a lista.
+  const events = data.events ?? [];
   const summary = useMemo(
     () => summarizeAccounts(accounts, today),
     [accounts, today],
@@ -164,13 +180,17 @@ export default function AdminPanel({
       return filter === "all"
         ? true
         : filter === "active"
-          ? b !== "suspended"
+          ? b !== "suspended" && b !== "pending"
           : b === filter;
     })
     .sort((a, b) => name(a).localeCompare(name(b), "pt-BR"));
   const filters: { id: Filter; label: string; count: number }[] = [
     { id: "all", label: "Todas", count: summary.total },
     { id: "active", label: "Ativas", count: summary.active },
+    // Só aparece quando há conta nova esperando.
+    ...(summary.pending
+      ? [{ id: "pending" as const, label: "Aguardando", count: summary.pending }]
+      : []),
     { id: "overdue", label: "Em atraso", count: summary.overdue },
     { id: "suspended", label: "Suspensas", count: summary.suspended },
   ];
@@ -411,6 +431,25 @@ export default function AdminPanel({
 
           {view === "overview" && (
             <>
+              {summary.pending > 0 && (
+                <div className="billing-notice" role="status">
+                  <UserPlus size={20} aria-hidden="true" />
+                  <div>
+                    <strong>
+                      {summary.pending === 1
+                        ? "1 conta nova aguardando ativação"
+                        : `${summary.pending} contas novas aguardando ativação`}
+                    </strong>
+                    <p>
+                      Contas novas só entram no sistema depois que você ativa.
+                      Confira se são mesmo seus clientes antes de liberar.
+                    </p>
+                  </div>
+                  <button onClick={() => showAccounts("pending")}>
+                    Ver contas <ArrowRight size={16} />
+                  </button>
+                </div>
+              )}
               <section className="metrics" aria-label="Indicadores das assinaturas">
                 <Metric
                   index={1}
@@ -532,6 +571,12 @@ export default function AdminPanel({
                         color: "var(--amber)",
                       },
                       {
+                        key: "pending",
+                        label: "Aguardando ativação",
+                        count: summary.pending,
+                        color: "var(--steel)",
+                      },
+                      {
                         key: "suspended",
                         label: "Suspensas",
                         count: summary.suspended,
@@ -571,6 +616,30 @@ export default function AdminPanel({
                   )}
                 </section>
               </div>
+              <section className="panel audit-panel">
+                <PanelHeading
+                  title="Registro de ações"
+                  subtitle="Quem ativou, suspendeu, editou ou registrou pagamento, e quando"
+                />
+                {events.length ? (
+                  <ol className="audit-list">
+                    {events.map((e) => (
+                      <li key={e.id}>
+                        <time dateTime={e.createdAt}>{moment(e.createdAt)}</time>
+                        <span>
+                          <strong>{e.admin || "Administrador removido"}</strong>{" "}
+                          {describeEvent(e)}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <Empty
+                    title="Nenhuma ação registrada"
+                    description="Ativações, suspensões, assinaturas e pagamentos aparecem aqui."
+                  />
+                )}
+              </section>
             </>
           )}
 
@@ -579,8 +648,8 @@ export default function AdminPanel({
               <p className="info-line">
                 <Info size={16} />
                 Para cadastrar um cliente, crie o usuário com e-mail e senha em
-                Authentication → Users no Supabase. Ele aparece aqui
-                automaticamente, com acesso ativo.
+                Authentication → Users no Supabase. Ele aparece aqui aguardando
+                ativação e só entra no sistema depois que você clicar em Ativar.
               </p>
               <section className="panel">
                 <div className="stock-toolbar admin-toolbar">
@@ -690,14 +759,14 @@ export default function AdminPanel({
                                   >
                                     <Pencil size={15} />
                                   </button>
-                                  {a.status === "suspended" ? (
+                                  {a.status !== "active" ? (
                                     <button
-                                      className="row-toggle"
+                                      className={`row-toggle ${a.status === "pending" ? "activate" : ""}`}
                                       onClick={() => open("status", a)}
-                                      aria-label={`Reativar acesso de ${name(a)}`}
+                                      aria-label={`${a.status === "pending" ? "Ativar" : "Reativar"} acesso de ${name(a)}`}
                                     >
                                       <LockOpen size={14} />
-                                      Reativar
+                                      {a.status === "pending" ? "Ativar" : "Reativar"}
                                     </button>
                                   ) : (
                                     <button
@@ -793,16 +862,20 @@ function AccountDialog({
   const [error, setError] = useState("");
   const [reactivate, setReactivate] = useState(true);
   const suspend = account.status === "active";
+  const pending = account.status === "pending";
   const next = nextPaidUntil(account.paidUntil, today);
   const who = name(account);
+  const statusAction = suspend
+    ? "Suspender acesso"
+    : pending
+      ? "Ativar acesso"
+      : "Reativar acesso";
   const title =
     kind === "payment"
       ? "Registrar pagamento"
       : kind === "plan"
         ? "Assinatura"
-        : suspend
-          ? "Suspender acesso"
-          : "Reativar acesso";
+        : statusAction;
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (saving) return;
@@ -817,9 +890,11 @@ function AccountDialog({
       };
       message = suspend
         ? `Acesso de ${who} suspenso.`
-        : `Acesso de ${who} reativado.`;
+        : pending
+          ? `Conta de ${who} ativada.`
+          : `Acesso de ${who} reativado.`;
     } else if (kind === "payment") {
-      const back = account.status === "suspended" && reactivate;
+      const back = account.status !== "active" && reactivate;
       command = {
         kind: "payment",
         accountId: account.id,
@@ -869,6 +944,15 @@ function AccountDialog({
                   ao reativar.
                 </span>
               </p>
+            ) : pending ? (
+              <p className="hint">
+                <LockOpen size={16} />
+                <span>
+                  <strong>{account.email}</strong> passa a entrar no sistema.
+                  Ative só contas que você mesmo criou para um cliente. Depois,
+                  informe a mensalidade e o vencimento em Editar assinatura.
+                </span>
+              </p>
             ) : (
               <p className="hint">
                 <LockOpen size={16} />
@@ -900,7 +984,7 @@ function AccountDialog({
                   <strong>{displayDate(next)}</strong>
                 </div>
               </div>
-              {account.status === "suspended" && (
+              {account.status !== "active" && (
                 <label className="check">
                   <input
                     type="checkbox"
@@ -908,9 +992,11 @@ function AccountDialog({
                     onChange={(e) => setReactivate(e.target.checked)}
                   />
                   <span>
-                    <strong>Reativar o acesso agora</strong>
-                    Esta conta está suspensa. Desmarque para só registrar o
-                    pagamento.
+                    <strong>{pending ? "Ativar o acesso agora" : "Reativar o acesso agora"}</strong>
+                    {pending
+                      ? "Esta conta ainda não foi ativada."
+                      : "Esta conta está suspensa."}{" "}
+                    Desmarque para só registrar o pagamento.
                   </span>
                 </label>
               )}
@@ -985,9 +1071,7 @@ function AccountDialog({
                   ? "Confirmar pagamento"
                   : kind === "plan"
                     ? "Salvar assinatura"
-                    : suspend
-                      ? "Suspender acesso"
-                      : "Reativar acesso"}
+                    : statusAction}
             </button>
           </div>
         </fieldset>

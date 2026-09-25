@@ -1,5 +1,5 @@
 "use client";
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import {
   ArrowUpRight,
   CalendarCheck,
@@ -84,7 +84,10 @@ export default function ValidityPage({
   remindersReady,
   onSaveReminder,
   now,
+  forecast,
 }: {
+  // Previsão de recargas, entre o resumo e o calendário.
+  forecast?: ReactNode;
   validities: Validity[];
   demo: boolean;
   busy: boolean;
@@ -150,6 +153,7 @@ export default function ValidityPage({
           <small>{pending.length} lembretes ativos</small>
         </div>
       </section>
+      {forecast}
       <div className="validity-layout">
         <MonthCalendar
           month={month}

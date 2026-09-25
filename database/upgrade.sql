@@ -13,12 +13,17 @@
 --   4. Orçamentos numerados e preservados junto de cada venda.
 --   5. Cadastro da empresa por conta, preservado nos novos orçamentos.
 --   6. Contas por assinatura: suspensão de acesso e painel do administrador.
---      Sem registro de assinatura a conta está ativa, então aplicar esta
---      atualização não bloqueia ninguém. O administrador é definido à mão,
---      com o comando comentado no fim deste arquivo.
+--      Conta nova aguarda ativação pelo administrador. Na primeira aplicação,
+--      as contas que já existem ficam ativas: ninguém é bloqueado. O
+--      administrador é definido à mão, com o comando no fim deste arquivo.
+--      As ações do administrador ficam registradas (quem, o quê, quando).
+--   7. Preferências da conta: meta de vendas por mês e valor médio da recarga
+--      (previsão de recargas). O cliente vê o próprio vencimento da assinatura.
 
 alter table public.itape_accounts add column if not exists company jsonb
   check (company is null or jsonb_typeof(company) = 'object');
+alter table public.itape_accounts add column if not exists settings jsonb not null default '{}'::jsonb
+  check (jsonb_typeof(settings) = 'object');
 
 create table if not exists public.itape_quotations (
   id uuid primary key,
@@ -103,7 +108,7 @@ create table if not exists itape_private.admins (
 );
 create table if not exists itape_private.subscriptions (
   owner_id uuid primary key references auth.users(id) on delete cascade,
-  status text not null default 'active' check (status in ('active', 'suspended')),
+  status text not null default 'pending' check (status in ('active', 'suspended', 'pending')),
   monthly_fee bigint not null default 0 check (monthly_fee between 0 and 100000000),
   paid_until date check (paid_until between '2000-01-01'::date and '2100-12-31'::date),
   last_payment_on date,
@@ -127,19 +132,68 @@ revoke all on itape_private.admins, itape_private.subscriptions from public, ano
 -- Atividade diária do painel do administrador.
 create index if not exists itape_requests_created on itape_private.requests(created_at);
 
-create or replace function itape_private.account_active() returns boolean
-language sql stable security definer set search_path = '' as $$
-  select not exists(select 1 from itape_private.subscriptions where owner_id = (select auth.uid()) and status = 'suspended');
+-- Conta nova começa aguardando ativação: só entra depois que o administrador
+-- libera, mesmo que alguém consiga criar um usuário no Supabase. Na primeira
+-- vez que a regra é aplicada, quem já existia fica ativo, então ninguém que usa
+-- o sistema hoje é bloqueado. O registro em migrations impede que rodar o
+-- arquivo de novo ative as contas criadas depois.
+alter table itape_private.subscriptions alter column status set default 'pending';
+alter table itape_private.subscriptions drop constraint if exists subscriptions_status_check;
+alter table itape_private.subscriptions add constraint subscriptions_status_check check (status in ('active', 'suspended', 'pending'));
+create table if not exists itape_private.migrations (
+  name text primary key,
+  applied_at timestamptz not null default now()
+);
+alter table itape_private.migrations enable row level security;
+revoke all on itape_private.migrations from public, anon, authenticated;
+do $$
+begin
+  if not exists (select 1 from itape_private.migrations where name = 'accounts-require-activation') then
+    insert into itape_private.subscriptions(owner_id, status)
+    select id, 'active' from auth.users where not coalesce(is_anonymous, false)
+    on conflict (owner_id) do nothing;
+    insert into itape_private.migrations(name) values ('accounts-require-activation');
+  end if;
+end;
 $$;
+
+-- Registro das ações do administrador: quem fez o quê, em qual conta e quando.
+create table if not exists itape_private.admin_events (
+  id bigint generated always as identity primary key,
+  admin_id uuid references auth.users(id) on delete set null,
+  account_id uuid references auth.users(id) on delete cascade,
+  action text not null,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists itape_admin_events_created on itape_private.admin_events(created_at desc);
+alter table itape_private.admin_events enable row level security;
+revoke all on itape_private.admin_events from public, anon, authenticated;
+
 create or replace function itape_private.is_admin() returns boolean
 language sql stable security definer set search_path = '' as $$
   select (select auth.uid()) is not null
     and not coalesce(((select auth.jwt())->>'is_anonymous')::boolean, false)
     and exists(select 1 from itape_private.admins where user_id = (select auth.uid()));
 $$;
+-- Ativa: administrador ou assinatura liberada. Sem registro, aguardando
+-- ativação, ou suspensa: sem acesso.
+create or replace function itape_private.account_active() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select itape_private.is_admin()
+    or exists(select 1 from itape_private.subscriptions where owner_id = (select auth.uid()) and status = 'active');
+$$;
 create or replace function itape_private.access() returns jsonb
 language sql stable security definer set search_path = '' as $$
-  select jsonb_build_object('active', itape_private.account_active(), 'admin', itape_private.is_admin());
+  select jsonb_build_object(
+    'active', itape_private.account_active(),
+    'admin', itape_private.is_admin(),
+    'status', case when itape_private.is_admin() then 'active'
+      else coalesce((select status from itape_private.subscriptions where owner_id = (select auth.uid())), 'pending') end,
+    -- Só a própria assinatura: o aviso de vencimento dentro do sistema.
+    'paidUntil', (select paid_until from itape_private.subscriptions where owner_id = (select auth.uid())),
+    'monthlyFee', coalesce((select monthly_fee from itape_private.subscriptions where owner_id = (select auth.uid())), 0)
+  );
 $$;
 
 -- Defesa em profundidade: mesmo consultando as tabelas diretamente, uma conta
@@ -159,6 +213,7 @@ begin
   return jsonb_build_object(
     'version', coalesce((select version from public.itape_accounts where owner_id = (select auth.uid())), 0),
     'company', (select company from public.itape_accounts where owner_id = (select auth.uid())),
+    'settings', coalesce((select settings from public.itape_accounts where owner_id = (select auth.uid())), '{}'::jsonb),
     'products', coalesce((select jsonb_agg(to_jsonb(p) - 'owner_id' order by p.sku) from public.itape_products p where owner_id = (select auth.uid())), '[]'::jsonb),
     'movements', coalesce((select jsonb_agg(jsonb_build_object('id', m.id, 'quotationId', m.quotation_id, 'productId', m.product_id, 'productName', m.product_name, 'kind', m.kind, 'quantity', m.quantity, 'unitPrice', m.unit_price, 'unitCost', m.unit_cost, 'tax', m.tax, 'date', m.date, 'party', m.party, 'actor', m.actor, 'createdAt', m.created_at) order by m.date, m.created_at) from public.itape_movements m where owner_id = (select auth.uid())), '[]'::jsonb),
     'quotations', coalesce((select jsonb_agg(jsonb_build_object('id', q.id, 'number', q.number, 'date', q.date, 'client', q.client, 'phone', q.phone, 'paymentTerms', q.payment_terms, 'notes', q.notes, 'company', q.company, 'items', q.items, 'createdAt', q.created_at) order by q.date, q.number) from public.itape_quotations q where owner_id = (select auth.uid())), '[]'::jsonb),
@@ -240,6 +295,16 @@ begin
       select jsonb_object_agg(field, trim(command->'company'->>field))
       from unnest(array['name','suffix','cnpj','address','city','email','contact','phone']) as fields(field)
     ) where owner_id = uid;
+  -- Meta de vendas: vale do mês informado em diante, até outra ser definida.
+  elsif k = 'goal' then
+    if coalesce(command->>'month', '') !~ '^[0-9]{4}-(0[1-9]|1[0-2])$' or command->>'month' < '2000-01' or command->>'month' > '2100-12' then raise exception 'Mês inválido.'; end if;
+    price_cents := (command->>'amount')::bigint;
+    if price_cents is null or price_cents < 0 or price_cents > 100000000 then raise exception 'Valor da meta inválido.'; end if;
+    update public.itape_accounts set settings = jsonb_set(settings, '{goals}', coalesce(settings->'goals', '{}'::jsonb) || jsonb_build_object(command->>'month', price_cents)) where owner_id = uid;
+  elsif k = 'recharge_price' then
+    price_cents := (command->>'amount')::bigint;
+    if price_cents is null or price_cents < 0 or price_cents > 100000000 then raise exception 'Valor da recarga inválido.'; end if;
+    update public.itape_accounts set settings = settings || jsonb_build_object('rechargePrice', price_cents) where owner_id = uid;
   elsif k = 'product' then
     if command->>'id' is not null then
       pid := (command->>'id')::uuid;
@@ -383,7 +448,7 @@ begin
         'lastSignInAt', u.last_sign_in_at,
         'company', coalesce(a.company->>'name', ''),
         'admin', ad.user_id is not null,
-        'status', coalesce(s.status, 'active'),
+        'status', case when ad.user_id is not null then 'active' else coalesce(s.status, 'pending') end,
         'monthlyFee', coalesce(s.monthly_fee, 0),
         'paidUntil', s.paid_until,
         'lastPaymentOn', s.last_payment_on,
@@ -409,7 +474,21 @@ begin
         where r.created_at >= since
         group by 1
       ) x on x.day = d.day
-    )
+    ),
+    'events', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', e.id,
+        'action', e.action,
+        'details', e.details,
+        'createdAt', e.created_at,
+        'admin', coalesce(au.email, ''),
+        'account', coalesce(nullif(ac.company->>'name', ''), tu.email, '')
+      ) order by e.created_at desc, e.id desc)
+      from (select * from itape_private.admin_events order by created_at desc, id desc limit 20) e
+      left join auth.users au on au.id = e.admin_id
+      left join auth.users tu on tu.id = e.account_id
+      left join public.itape_accounts ac on ac.owner_id = e.account_id
+    ), '[]'::jsonb)
   );
 end;
 $$;
@@ -428,6 +507,8 @@ begin
   if not itape_private.is_admin() then raise exception 'Acesso restrito ao administrador.'; end if;
   target := (command->>'accountId')::uuid;
   if target is null or not exists(select 1 from auth.users where id = target) then raise exception 'Conta não encontrada.'; end if;
+  -- Sem registro, a conta nasce aguardando ativação: editar a assinatura ou
+  -- registrar pagamento não libera o acesso por engano.
   insert into itape_private.subscriptions(owner_id) values(target) on conflict do nothing;
   select * into s from itape_private.subscriptions where owner_id = target for update;
   if k = 'status' then
@@ -435,6 +516,8 @@ begin
     if command->>'status' = 'suspended' and exists(select 1 from itape_private.admins where user_id = target) then raise exception 'Uma conta de administrador não pode ser suspensa.'; end if;
     if s.status <> command->>'status' then
       update itape_private.subscriptions set status = command->>'status', status_changed_at = now(), updated_at = now() where owner_id = target;
+      insert into itape_private.admin_events(admin_id, account_id, action, details)
+      values(auth.uid(), target, 'status', jsonb_build_object('from', s.status, 'to', command->>'status'));
     end if;
   elsif k = 'plan' then
     fee := (command->>'monthlyFee')::bigint;
@@ -443,18 +526,23 @@ begin
     if due is not null and (due < '2000-01-01'::date or due > '2100-12-31'::date) then raise exception 'Data de vencimento inválida.'; end if;
     if length(coalesce(command->>'notes', '')) > 1000 then raise exception 'As observações passam de 1000 caracteres.'; end if;
     update itape_private.subscriptions set monthly_fee = fee, paid_until = due, notes = trim(coalesce(command->>'notes', '')), updated_at = now() where owner_id = target;
+    insert into itape_private.admin_events(admin_id, account_id, action, details)
+    values(auth.uid(), target, 'plan', jsonb_build_object('monthlyFee', fee, 'paidUntil', due, 'before', jsonb_build_object('monthlyFee', s.monthly_fee, 'paidUntil', s.paid_until)));
   elsif k = 'payment' then
     -- O pedido traz o vencimento que o administrador viu. Repetir o mesmo
     -- pagamento (duplo clique, resposta perdida) não avança dois meses.
     if s.paid_until is distinct from (command->>'paidUntil')::date then raise exception 'Os dados mudaram. Atualize e tente novamente.'; end if;
     reactivate := coalesce((command->>'reactivate')::boolean, false) and s.status <> 'active';
+    due := (coalesce(s.paid_until, local_today) + interval '1 month')::date;
     update itape_private.subscriptions set
-      paid_until = (coalesce(s.paid_until, local_today) + interval '1 month')::date,
+      paid_until = due,
       last_payment_on = local_today,
       status = case when reactivate then 'active' else status end,
       status_changed_at = case when reactivate then now() else status_changed_at end,
       updated_at = now()
     where owner_id = target;
+    insert into itape_private.admin_events(admin_id, account_id, action, details)
+    values(auth.uid(), target, 'payment', jsonb_build_object('from', s.paid_until, 'to', due, 'amount', s.monthly_fee, 'reactivated', reactivate, 'previousStatus', s.status));
   else raise exception 'Operação desconhecida.';
   end if;
 end;

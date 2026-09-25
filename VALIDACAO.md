@@ -37,3 +37,28 @@ A função preexistente `public.rls_auto_enable()`, usada como event trigger par
 
 - O `upgrade.sql` não foi executado no projeto Supabase real, e o painel não foi aberto com uma conta administradora real. Falta aplicar a atualização e cadastrar o administrador (README, seção Administração).
 - PGlite não é o Supabase: o esquema `auth` foi simulado. Leitura de `auth.users` e das colunas `last_sign_in_at`/`is_anonymous` depende do projeto real.
+
+## Meta, comparação, previsão, primeiros passos e aviso da mensalidade (24/09/2026)
+
+- `npm test` (59 testes, 8 novos: período anterior com virada de mês e fevereiro, variação, meta vigente por mês, progresso e ritmo, previsão de recargas, comandos de preferências, aviso da mensalidade e número de WhatsApp), `npm run check` e `npm run build`: aprovados.
+- SQL em PGlite, nos três caminhos: banco novo; banco com a versão anterior ao painel de administração; e banco já com o painel (commit "Painel Adm") recebendo esta atualização. `verify.sql` aprovado em todos. Ele passou a cobrir metas por mês, valor da recarga, mês e valor inválidos recusados e o vencimento da própria assinatura em `itape_access`.
+- Navegador Edge em 1440 e 390 px: demonstração (primeiros passos, setas de variação, meta abaixo do ritmo e meta batida, janela da meta, previsão com troca de mês) e uma rota temporária já removida (conta nova, aviso a vencer, aviso vencido, tela suspensa com WhatsApp). Sem erros na página e sem transbordamento horizontal.
+
+### Limites
+
+- Não executado no projeto Supabase real: falta aplicar o `upgrade.sql` atualizado.
+- O potencial da previsão usa um valor médio único por recarga, não o preço de cada tipo de extintor.
+
+## Segurança (24/09/2026)
+
+- Revisão: sem `dangerouslySetInnerHTML`, `innerHTML`, `eval` ou `new Function` no código; `npm audit` sem vulnerabilidades (produção e desenvolvimento); só o `.env.example` no histórico do git.
+- `npm test` (66 testes, 7 novos: limite de tentativas, limite de memória do limitador, leitura de corpo com limite, IP do visitante, política CSP, conta aguardando ativação e frases do registro de ações), `npm run check` e `npm run build`: aprovados.
+- SQL em PGlite: banco novo; banco anterior ao painel; e banco com o painel commitado, com contas criadas antes da atualização. Resultado: a conta existente ficou ativa, a suspensa continuou suspensa, uma conta criada depois ficou aguardando, e rodar o `upgrade.sql` de novo não a ativou. `verify.sql` cobre também: conta sem ativação não lê nem grava; editar a assinatura não ativa a conta; ativação e edição registradas com o administrador; registro fechado à leitura direta. Controle: o novo `verify.sql` falha no banco sem a atualização.
+- Build de produção (`next start`) com um Supabase Auth falso local, para não gastar tentativas no projeto real: 24 verificações aprovadas. Entre elas: todos os scripts com o nonce, nonce diferente a cada requisição, cabeçalhos de proteção, 8 senhas erradas aceitas e a 9ª barrada sem chegar ao Auth, `Retry-After`, e-mail em maiúsculas contado junto, corpo de 100 KB sem tamanho declarado recusado (413), outra origem recusada (403) e `/admin` sem login redirecionado.
+- Edge em produção: login, demonstração, janelas, validades e geração do PDF de orçamento funcionando, sem nenhuma violação de CSP. O zod roda sem `eval` (`jitless`), para não disparar o alerta.
+
+### Limites
+
+- Não executado no Supabase real: falta aplicar o `upgrade.sql`.
+- O limite de tentativas vale por processo do servidor. Em hospedagem com várias instâncias, cada uma conta as suas.
+- As configurações do painel do Supabase (cadastros, senhas, limites, backups) não foram vistas nem alteradas.
